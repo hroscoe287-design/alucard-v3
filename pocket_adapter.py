@@ -337,7 +337,13 @@ class PocketOptionAdapter:
             )
 
     def _poll_stream(self, client) -> None:
-        seen: dict[str, int] = {}
+        # get_realtime_ticks() exposes a bounded ring buffer, not an append-only
+        # list. Tracking the buffer length causes a serious live-feed bug:
+        # once the buffer reaches its limit, its length stays constant and new
+        # ticks are never consumed. Track tick identities instead.
+        seen: dict[str, set[tuple[float, float]]] = {}
+        seen_order: dict[str, list[tuple[float, float]]] = {}
+        max_seen = 500
 
         while not self._stop.is_set() and self.connected:
             subscriptions = list(self._subscriptions)
@@ -347,21 +353,38 @@ class PocketOptionAdapter:
 
             for asset, period in subscriptions:
                 try:
-                    ticks = client.get_realtime_ticks(asset, limit=200)
+                    ticks = client.get_realtime_ticks(asset, limit=200) or []
                 except Exception as exc:
                     self.last_error = f"ticks:{type(exc).__name__}"
                     continue
 
-                start = seen.get(asset, 0)
-                if start > len(ticks):
-                    start = 0
+                asset_seen = seen.setdefault(asset, set())
+                asset_order = seen_order.setdefault(asset, [])
 
-                for timestamp, price in ticks[start:]:
+                for raw_timestamp, raw_price in ticks:
+                    try:
+                        timestamp = float(raw_timestamp)
+                        price = float(raw_price)
+                    except (TypeError, ValueError):
+                        continue
+
+                    # Normalize milliseconds before building the identity so
+                    # the same tick cannot be processed twice after polling.
+                    if timestamp > 10_000_000_000:
+                        timestamp /= 1000.0
+                    identity = (timestamp, price)
+                    if identity in asset_seen:
+                        continue
+
+                    asset_seen.add(identity)
+                    asset_order.append(identity)
+                    if len(asset_order) > max_seen:
+                        expired = asset_order.pop(0)
+                        asset_seen.discard(expired)
+
                     self.last_message_at = time.time()
                     self.connection_stage = "market_data_received"
-                    self._consume_tick(asset, period, float(timestamp), float(price))
-
-                seen[asset] = len(ticks)
+                    self._consume_tick(asset, period, timestamp, price)
 
             time.sleep(0.25)
 
