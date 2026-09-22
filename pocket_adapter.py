@@ -119,7 +119,6 @@ class PocketOptionAdapter:
     async def _connect_loop(self) -> None:
         from pocket_option import PocketOptionClient
         from pocket_option.constants import Regions
-        from pocket_option.contrib.default_init import default_init
         from pocket_option.models import Asset, AuthorizationData
 
         try:
@@ -195,16 +194,16 @@ class PocketOptionAdapter:
                 self.connection_stage = f"connecting:{str(region)}"
                 self.last_error = ""
 
-                default_init(
-                    client,
-                    authorization=auth,
-                    sub_assets=assets,
-                    sub_period=period,
-                )
-
                 @client.on.connect
                 async def _on_connect():
                     self.connection_stage = "socketio_connected"
+                    # pocket-option 0.4.0's generated auth emitter expects
+                    # JSON-compatible data at runtime, even though its type
+                    # annotation names AuthorizationData. Passing the Pydantic
+                    # model directly causes Socket.IO to raise
+                    # "AuthorizationData is not JSON serializable".
+                    await client.emit.auth(auth.model_dump())
+
 
                 @client.on.success_auth
                 async def _on_auth(_data):
@@ -212,6 +211,25 @@ class PocketOptionAdapter:
                     self.last_message_at = time.time()
                     self.connection_stage = "authenticated"
                     print("ALUCARD Pocket Option SDK authenticated", flush=True)
+
+                    # Recreate the useful parts of default_init() after auth.
+                    # These calls are read-only market-data subscriptions.
+                    try:
+                        await client.emit.indicator_load()
+                        await client.emit.favorite_load()
+                        await client.emit.price_alert_load()
+                    except Exception:
+                        pass
+
+                    for asset in assets:
+                        try:
+                            await client.emit.subscribe_to_asset(asset)
+                            await client.emit.change_asset(
+                                ChangeAssetRequest(asset=asset, period=period)
+                            )
+                            await client.emit.subscribe_for_market_sentiment(asset)
+                        except Exception as exc:
+                            self.last_error = f"subscription:{type(exc).__name__}"
 
                 @client.on.disconnect
                 async def _on_disconnect(_data=None):
