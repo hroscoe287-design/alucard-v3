@@ -50,6 +50,7 @@ class PocketOptionAdapter:
         self._socket_ready = False
         self._auth_sent = False
         self.connection_stage = "idle"
+        self._pending_binary_event = None
 
     @property
     def configured(self) -> bool:
@@ -192,6 +193,27 @@ class PocketOptionAdapter:
     def _on_message(self, ws, message) -> None:
         self.last_message_at = time.time()
 
+        # Socket.IO binary attachment: the preceding 451- packet names the
+        # event and this frame contains the JSON payload.
+        if isinstance(message, (bytes, bytearray)):
+            event = self._pending_binary_event
+            self._pending_binary_event = None
+            if event:
+                try:
+                    decoded = json.loads(bytes(message).decode("utf-8"))
+                    if event == "successauth":
+                        self.connected = True
+                        self.connection_stage = "authenticated"
+                        for asset, period in list(self._subscriptions):
+                            self._send_subscription(asset, period)
+                    elif event in {"loadHistoryPeriodFast", "updateHistoryNewFast", "updateStream", "history"}:
+                        self.connected = True
+                        self.connection_stage = "market_data_received"
+                        self._consume_payload(decoded, default_asset=self._current_asset())
+                except (UnicodeDecodeError, TypeError, ValueError, json.JSONDecodeError):
+                    pass
+            return
+
         if not isinstance(message, str):
             return
 
@@ -231,10 +253,11 @@ class PocketOptionAdapter:
                             self._send_subscription(asset, period)
                         return
                     if event in {"loadHistoryPeriodFast", "updateHistoryNewFast", "updateStream", "history"}:
+                        self._pending_binary_event = event
                         self.connected = True
                         self.connection_stage = "market_data_received"
-                        if len(raw) > 1:
-                            self._consume_payload(raw[1])
+                        # The actual payload arrives as the next WebSocket
+                        # binary frame; do not discard it.
                         return
             except (TypeError, ValueError, json.JSONDecodeError):
                 pass
@@ -273,12 +296,15 @@ class PocketOptionAdapter:
                 self.connection_stage = "auth_error"
                 self.last_error = "Pocket Option authorization rejected"
 
-    def _consume_payload(self, payload) -> None:
+    def _current_asset(self) -> str | None:
+        return next(iter(self._subscriptions), (None, 0))[0]
+
+    def _consume_payload(self, payload, default_asset=None) -> None:
         # Pocket Option history/stream payloads are not consistent across
         # server clusters. Normalize dicts, [asset, candles], and raw OHLC
         # arrays without requiring one exact envelope shape.
         if isinstance(payload, dict):
-            asset = payload.get("asset") or payload.get("symbol") or payload.get("active")
+            asset = payload.get("asset") or payload.get("symbol") or payload.get("active") or default_asset
             for key in ("candles", "history", "data", "quotes", "values"):
                 value = payload.get(key)
                 if isinstance(value, list):
@@ -294,7 +320,7 @@ class PocketOptionAdapter:
                 self._consume_items(payload[0], payload[1])
                 return
             # Common history form: [[timestamp, open, close, high, low], ...]
-            self._consume_items(None, payload)
+            self._consume_items(default_asset, payload)
 
     def _consume_items(self, asset, items) -> None:
         if not isinstance(items, list):
