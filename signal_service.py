@@ -11,13 +11,16 @@ from market_state import MarketState
 from pocket_adapter import PocketOptionAdapter
 
 PERIODS = {
-    "5s": 5, "15s": 15, "30s": 30, "1m": 60, "2m": 120,
-    "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
-    "1h": 3600, "4h": 14400, "1d": 86400,
+    "5s": 5, "10s": 10, "15s": 15, "30s": 30,
+    "1m": 60, "2m": 120, "3m": 180, "5m": 300,
+    "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400,
+    "1d": 86400, "1w": 604800, "1mo": 2592000,
 }
 
 
 class SignalService:
+    PERIODS = PERIODS
+
     def __init__(self):
         self.state = MarketState()
         self.asset = os.getenv("POCKET_ASSET", "EURUSD_otc")
@@ -36,6 +39,17 @@ class SignalService:
         self.thread.start()
         self.started = True
 
+    def configure(self, asset: str, timeframe: str) -> None:
+        self.asset = asset
+        self.timeframe = timeframe
+        self.period = PERIODS[timeframe]
+        # Keep the live connection alive when possible. The adapter will
+        # switch the symbol/period on the existing socket.
+        if self.adapter.connected:
+            self.adapter.subscribe(asset, self.period)
+        else:
+            self.start()
+
     def _run(self) -> None:
         try:
             self.adapter.connect()
@@ -43,7 +57,6 @@ class SignalService:
             self.error = str(exc)[:200]
             self.started = False
         finally:
-            # Surface only the adapter's safe diagnostic label.
             if self.adapter.last_error:
                 self.error = self.adapter.last_error
             self.started = False
@@ -65,6 +78,17 @@ class SignalService:
                 "reasons": signal.reasons,
                 "indicators": signal.indicators,
             }
+        snap["candle_data"] = [
+            {
+                "timestamp": c.timestamp,
+                "open": c.open,
+                "high": c.high,
+                "low": c.low,
+                "close": c.close,
+                "volume": c.volume,
+            }
+            for c in self.state.get_candles(self.asset, self.period)[-120:]
+        ]
         snap["configured"] = self.adapter.configured
         snap["connected"] = self.adapter.connected
         snap["connection_stage"] = self.adapter.connection_stage
