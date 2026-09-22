@@ -50,7 +50,7 @@ POCKET_UID = _first_env((
     "UID",
     "USER_ID",
 ))
-POCKET_DEMO = os.getenv("POCKET_DEMO", os.getenv("PO_IS_DEMO", "1")).strip() or "1"
+POCKET_DEMO = os.getenv("POCKET_DEMO", os.getenv("PO_IS_DEMO", "0")).strip() or "0"
 POCKET_PLATFORM = os.getenv("POCKET_PLATFORM", os.getenv("PO_PLATFORM", "2")).strip() or "2"
 
 if _RAW_SESSION.lstrip().startswith("42") and '"auth"' in _RAW_SESSION:
@@ -99,6 +99,19 @@ class PocketOptionAdapter:
     @property
     def configured(self) -> bool:
         return bool(POCKET_SESSION and POCKET_UID)
+
+    @property
+    def account_mode(self) -> str:
+        return "DEMO" if str(POCKET_DEMO).strip() == "1" else "REAL"
+
+    def get_balance(self):
+        client = self._client
+        if client is None:
+            return None
+        try:
+            return client.get_balance()
+        except Exception:
+            return None
 
     def subscribe(self, asset: str, period: int) -> None:
         self._subscriptions.add((asset, period))
