@@ -80,6 +80,7 @@ class PocketOptionAdapter:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._client = None
         self._bars: dict[tuple[str, int], dict] = {}
+        self._data_logged = False
 
     @property
     def configured(self) -> bool:
@@ -203,6 +204,9 @@ class PocketOptionAdapter:
                     return
                 self.last_message_at = time.time()
                 self.connection_stage = "market_data_received"
+                if not self._data_logged:
+                    self._data_logged = True
+                    print("ALUCARD CONFIRMED MARKET DATA", flush=True)
                 for asset, period in list(self._subscriptions):
                     try:
                         candles = await client.candles.get_candles(
@@ -226,6 +230,9 @@ class PocketOptionAdapter:
                 self.last_message_at = time.time()
                 self.connected = True
                 self.connection_stage = "market_data_received"
+                if not self._data_logged:
+                    self._data_logged = True
+                    print("ALUCARD CONFIRMED MARKET DATA", flush=True)
                 for item in items or []:
                     asset = str(getattr(item, "asset", "")).split(".")[-1]
                     timestamp = float(getattr(item, "timestamp", 0))
