@@ -1,4 +1,4 @@
-# ALUCARD V3 — Gothic Market Intelligence
+# ALUCARD V4 — Gothic Market Intelligence
 
 A new ALUCARD build from scratch. This repository is intentionally separate from the legacy ALUCARD V2 project.
 
