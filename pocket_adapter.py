@@ -20,38 +20,47 @@ from typing import Callable
 
 from market_engine import Candle
 
-POCKET_SESSION = next(
-    (
-        os.getenv(name, "").strip()
-        for name in (
-            "POCKET_SESSION",
-            "PO_SSID",
-            "POCKET_OPTION_SSID",
-            "POCKET_OPTION_SESSION",
-            "PO_SESSION",
-            "PO_SSID_TOKEN",
-            "PO_TOKEN",
-            "SSID",
-        )
-        if os.getenv(name, "").strip()
-    ),
-    "",
-)
+def _first_env(names: tuple[str, ...]) -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
 
-POCKET_UID = next(
-    (
-        os.getenv(name, "").strip()
-        for name in (
-            "POCKET_UID",
-            "PO_UID",
-            "POCKET_OPTION_UID",
-            "UID",
-            "USER_ID",
-        )
-        if os.getenv(name, "").strip()
-    ),
-    "",
-)
+
+_RAW_SESSION = _first_env((
+    "POCKET_SESSION",
+    "PO_SSID",
+    "POCKET_OPTION_SSID",
+    "POCKET_OPTION_SESSION",
+    "PO_SESSION",
+    "PO_SSID_TOKEN",
+    "PO_TOKEN",
+    "SSID",
+))
+
+# Accept either a plain session string or the complete browser-style
+# 42["auth",{...}] message.  This also lets ALUCARD derive UID from the
+# captured auth message, so a separate UID variable is optional.
+POCKET_SESSION = _RAW_SESSION
+POCKET_UID = _first_env((
+    "POCKET_UID",
+    "PO_UID",
+    "POCKET_OPTION_UID",
+    "UID",
+    "USER_ID",
+))
+
+if _RAW_SESSION.startswith("42") and '"auth"' in _RAW_SESSION:
+    try:
+        auth = json.loads(_RAW_SESSION[2:])
+        payload = auth[1]
+        if isinstance(payload, dict):
+            POCKET_SESSION = str(payload.get("session", "")).strip()
+            if not POCKET_UID:
+                POCKET_UID = str(payload.get("uid", "")).strip()
+    except (ValueError, TypeError, IndexError, KeyError):
+        pass
 
 POCKET_DEMO = os.getenv("POCKET_DEMO", os.getenv("PO_IS_DEMO", "1")).strip() or "1"
 POCKET_PLATFORM = os.getenv("POCKET_PLATFORM", os.getenv("PO_PLATFORM", "2")).strip() or "2"
