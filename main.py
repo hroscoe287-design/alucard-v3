@@ -255,8 +255,8 @@ a{color:inherit}
   </section>
 
   <section class="cards">
-    <div class="card"><div class="label">Account</div><div class="big cyan">DEMO</div></div>
-    <div class="card"><div class="label">Balance</div><div class="big">—</div></div>
+    <div class="card"><div class="label">Account</div><div id="accountMode" class="big cyan">REAL</div></div>
+    <div class="card"><div class="label">Balance</div><div id="balanceTop" class="big">—</div></div>
     <div class="card"><div class="label">Open Trades</div><div class="big">0 / 3</div></div>
     <div class="card"><div class="label">Win Rate</div><div class="big green">—</div></div>
     <div class="card"><div class="label">Total P/L</div><div class="big green">—</div></div>
@@ -519,6 +519,8 @@ async function refresh(){
     document.getElementById("liveBadge").innerHTML=live?"● LIVE<br><span style='font-weight:400'>Market Feed</span>":"○ OFFLINE<br><span style='font-weight:400'>Market Feed</span>";
     document.getElementById("liveBadge").className=live?"live":"live";
     document.getElementById("engineTop").textContent=d.engine||"WAITING";
+    document.getElementById("accountMode").textContent=d.account_mode||"REAL";
+    document.getElementById("balanceTop").textContent=(d.balance==null)?"—":("$"+Number(d.balance).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}));
     document.getElementById("feedState").textContent=live?"CONNECTED":"WAITING";
     document.getElementById("feedText").textContent=live?"Pocket Option market-data stream connected":(d.error||"Waiting for market data");
     document.getElementById("assetTitle").textContent={{ASSET_LABELS|tojson}}[d.asset]||d.asset;
