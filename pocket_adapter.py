@@ -41,6 +41,7 @@ class PocketOptionAdapter:
         self._candle_buffers = defaultdict(dict)
         self._socket_ready = False
         self._auth_sent = False
+        self.connection_stage = "idle"
 
     @property
     def configured(self) -> bool:
@@ -54,6 +55,7 @@ class PocketOptionAdapter:
             self._socket_ready = False
             self._auth_sent = False
             self.connected = False
+            self.connection_stage = "opening"
 
             self.ws = websocket.WebSocketApp(
                 POCKET_WS_URL,
@@ -71,6 +73,7 @@ class PocketOptionAdapter:
                 )
             except Exception as exc:
                 self.last_error = f"WebSocket: {type(exc).__name__}"
+                self.connection_stage = "run_forever_error"
 
             self.connected = False
             self._socket_ready = False
@@ -92,8 +95,10 @@ class PocketOptionAdapter:
 
     def _on_open(self, ws) -> None:
         self.last_error = ""
+        self.connection_stage = "transport_open"
         # Engine.IO/Socket.IO handshake: wait for the server's Socket.IO
         # connect acknowledgement before sending application auth.
+        self.connection_stage = "socketio_connect_sent"
         self._send("40")
 
     def _send_auth(self) -> None:
@@ -115,11 +120,13 @@ class PocketOptionAdapter:
             "isFastHistory": True,
             "isOptimized": True,
         }
+        self.connection_stage = "auth_sent"
         self._send("42" + json.dumps(["auth", auth], separators=(",", ":")))
         self._auth_sent = True
 
         # Give the server a short turn to process auth before requesting data.
         time.sleep(0.35)
+        self.connection_stage = "subscription_sent"
         for asset, period in list(self._subscriptions):
             self._send_subscription(asset, period)
 
@@ -156,6 +163,7 @@ class PocketOptionAdapter:
         # Socket.IO namespace connection acknowledgement.
         if message == "40" or message.startswith("40"):
             self._socket_ready = True
+            self.connection_stage = "socketio_ready"
             try:
                 self._send_auth()
             except Exception:
@@ -176,10 +184,12 @@ class PocketOptionAdapter:
 
             if event in {"auth", "authenticated", "success", "authorization"}:
                 self.connected = True
+                self.connection_stage = "authenticated"
                 return
 
             if event in {"updateHistoryNewFast", "updateStream", "history"}:
                 self.connected = True
+                self.connection_stage = "market_data_received"
                 self._consume_payload(payload)
 
     def _consume_payload(self, payload) -> None:
@@ -250,8 +260,10 @@ class PocketOptionAdapter:
         # Never log the exception itself because a library error could contain
         # request headers or connection details. Keep only a safe type label.
         self.connected = False
+        self.connection_stage = "websocket_error"
         self.last_error = f"WebSocket error: {type(error).__name__}"
 
     def _on_close(self, ws, code, reason) -> None:
         self.connected = False
         self._socket_ready = False
+        self.connection_stage = f"closed:{code}" if code is not None else "closed"
