@@ -203,8 +203,13 @@ class PocketOptionAdapter:
                     # annotation names AuthorizationData. Passing the Pydantic
                     # model directly causes Socket.IO to raise
                     # "AuthorizationData is not JSON serializable".
-                    await client.emit.auth(auth.model_dump())
+                    # Bypass the SDK emitter here. pocket-option 0.4.0 can pass its
+                    # AuthorizationData object through to python-socketio, which
+                    # then rejects it as not JSON serializable. Send a plain
+                    # JSON-compatible auth dictionary directly through Socket.IO.
+                    await client.sio.emit(event="auth", data=auth.model_dump(mode="json"))
                     self.connection_stage = "auth_sent"
+                    print("ALUCARD auth packet sent", flush=True)
 
                 @client.on.success_auth
                 async def _on_auth(_data):
