@@ -239,7 +239,7 @@ class PocketOptionAdapter:
                     f"ALUCARD Pocket Option SDK trying {base_url.split('//')[-1]}",
                     flush=True,
                 )
-                await client.connect(base_url, auth=auth, wait=True, wait_timeout=10, retry=False)
+                await client.connect(base_url, auth=auth.model_dump(mode="json"), wait=True, wait_timeout=10, retry=False)
 
                 # Socket.IO connect succeeded. default_init sends auth and the
                 # successauth event flips self.connected.
