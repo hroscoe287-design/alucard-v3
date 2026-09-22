@@ -51,6 +51,7 @@ class PocketOptionAdapter:
         self._auth_sent = False
         self.connection_stage = "idle"
         self._pending_binary_event = None
+        self._tick_bars = {}
 
     @property
     def configured(self) -> bool:
@@ -170,7 +171,7 @@ class PocketOptionAdapter:
             separators=(",", ":"),
         ))
         self._send("42" + json.dumps(
-            ["subfor", {"asset": asset}],
+            ["subfor", asset],
             separators=(",", ":"),
         ))
         payload = [
@@ -299,6 +300,31 @@ class PocketOptionAdapter:
     def _current_asset(self) -> str | None:
         return next(iter(self._subscriptions), (None, 0))[0]
 
+    def _consume_tick(self, asset: str, timestamp, price) -> None:
+        try:
+            timestamp = int(float(timestamp))
+            price = float(price)
+        except (TypeError, ValueError):
+            return
+        if timestamp > 10000000000:
+            timestamp //= 1000
+        if price <= 0:
+            return
+        period = next(iter(self._subscriptions), (asset, 60))[1]
+        bucket = (timestamp // period) * period
+        key = (asset, period)
+        bar = self._tick_bars.get(key)
+        if bar is None or bar["timestamp"] != bucket:
+            if bar is not None:
+                self._emit(asset, Candle(bar["timestamp"], bar["open"], bar["high"], bar["low"], bar["close"], bar["volume"]))
+            self._tick_bars[key] = {"timestamp": bucket, "open": price, "high": price, "low": price, "close": price, "volume": 1.0}
+        else:
+            bar["high"] = max(bar["high"], price)
+            bar["low"] = min(bar["low"], price)
+            bar["close"] = price
+            bar["volume"] += 1.0
+        bar = self._tick_bars[key]
+        self._emit(asset, Candle(bar["timestamp"], bar["open"], bar["high"], bar["low"], bar["close"], bar["volume"]))
     def _consume_payload(self, payload, default_asset=None) -> None:
         # Pocket Option history/stream payloads are not consistent across
         # server clusters. Normalize dicts, [asset, candles], and raw OHLC
