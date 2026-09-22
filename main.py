@@ -242,7 +242,14 @@ a{color:inherit}
     </div>
     <div class="top-status">
       <div id="liveBadge" class="live">● LIVE<br><span style="font-weight:400">Market Feed</span></div>
-      <div class="clock" id="clock">--:--:--</div>
+      <div class="clock">
+        <div style="font-size:9px;color:#71818a;letter-spacing:1px">REAL WORLD TIME</div>
+        <div id="clock">--:--:--</div>
+      </div>
+      <div class="clock" id="tradeClock">
+        <div style="font-size:9px;color:#ff5261;letter-spacing:1px">ENTRY COUNTDOWN</div>
+        <div id="tradeCountdown">WAIT</div>
+      </div>
     </div>
   </section>
 
@@ -386,6 +393,41 @@ function clock(){
 }
 setInterval(clock,1000); clock();
 
+let signalCountdownEndsAt = null;
+let signalCountdownDirection = "WAIT";
+
+function formatCountdown(sec){
+  sec=Math.max(0,Math.ceil(sec));
+  return pad(Math.floor(sec/60))+":"+pad(sec%60);
+}
+function startSignalCountdown(seconds, direction){
+  signalCountdownEndsAt = Date.now() + Math.max(1, Number(seconds)||0)*1000;
+  signalCountdownDirection = direction || "WAIT";
+}
+function updateSignalCountdown(){
+  const box=document.getElementById("tradeCountdown");
+  const side=document.getElementById("countdown");
+  if(!signalCountdownEndsAt || signalCountdownDirection==="WAIT"){
+    box.textContent="WAIT";
+    box.style.color="#71818a";
+    side.textContent="--:--";
+    return;
+  }
+  const left=Math.max(0,(signalCountdownEndsAt-Date.now())/1000);
+  if(left<=0){
+    box.textContent="TOO LATE";
+    box.style.color="#ff3045";
+    side.textContent="TOO LATE";
+    return;
+  }
+  const text=formatCountdown(left);
+  box.textContent=signalCountdownDirection+" • "+text;
+  box.style.color=left<=5?"#ff3045":"#00ff91";
+  side.textContent=text;
+}
+setInterval(updateSignalCountdown,200);
+updateSignalCountdown();
+
 function pickTf(tf){
   currentTf=tf;
   document.querySelectorAll(".tfbtn").forEach(b=>b.classList.toggle("active",b.dataset.tf===tf));
@@ -439,6 +481,13 @@ function setSignal(s){
   const direction=s?.direction||"WAIT";
   const conf=Number(s?.confidence||0);
   lastDirection=direction;
+  if(direction==="CALL" || direction==="PUT"){
+    // Entry window begins when the fresh signal reaches the dashboard.
+    startSignalCountdown(12, direction);
+  } else {
+    signalCountdownEndsAt=null;
+    signalCountdownDirection="WAIT";
+  }
   const el=document.getElementById("signal");
   el.textContent=direction;
   el.className="signal-word "+(direction==="CALL"?"green":direction==="PUT"?"red":"cyan");
@@ -475,7 +524,7 @@ async function refresh(){
     document.getElementById("stale").textContent=d.stale_seconds==null?"—":Number(d.stale_seconds).toFixed(1)+"s";
     document.getElementById("stage").textContent=d.connection_stage||"—";
     document.getElementById("entryWindow").textContent=live?Math.max(0,Math.ceil(periodSeconds[currentTf]-(Date.now()/1000)%periodSeconds[currentTf]))+"s":"—";
-    document.getElementById("countdown").textContent=live?Math.max(0,Math.ceil(periodSeconds[currentTf]-(Date.now()/1000)%periodSeconds[currentTf])).toString().padStart(2,"0")+"s":"--:--";
+    if(!live && !signalCountdownEndsAt){ document.getElementById("countdown").textContent="--:--"; }
     setSignal(d.signal);
     drawChart(d.candle_data||[]);
   }catch(e){
