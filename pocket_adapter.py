@@ -165,6 +165,10 @@ class PocketOptionAdapter:
             separators=(",", ":"),
         ))
         self._send("42" + json.dumps(
+            ["subscribeSymbol", {"asset": asset}],
+            separators=(",", ":"),
+        ))
+        self._send("42" + json.dumps(
             ["subfor", {"asset": asset}],
             separators=(",", ":"),
         ))
@@ -204,6 +208,36 @@ class PocketOptionAdapter:
                 self._send_auth()
             except Exception:
                 self.connected = False
+            return
+
+        # Pocket Option commonly uses 41 / NotAuthorized for rejected auth.
+        if message == "41" or "NotAuthorized" in message:
+            self.connected = False
+            self.connection_stage = "auth_error"
+            self.last_error = "Pocket Option authorization rejected"
+            return
+
+        # Pocket Option can return binary-event envelopes such as
+        # 451-["updateStream",...] and 451-["loadHistoryPeriodFast",...].
+        if message.startswith("451-"):
+            try:
+                raw = json.loads(message[4:])
+                if isinstance(raw, list) and raw:
+                    event = raw[0]
+                    if event == "successauth":
+                        self.connected = True
+                        self.connection_stage = "authenticated"
+                        for asset, period in list(self._subscriptions):
+                            self._send_subscription(asset, period)
+                        return
+                    if event in {"loadHistoryPeriodFast", "updateHistoryNewFast", "updateStream", "history"}:
+                        self.connected = True
+                        self.connection_stage = "market_data_received"
+                        if len(raw) > 1:
+                            self._consume_payload(raw[1])
+                        return
+            except (TypeError, ValueError, json.JSONDecodeError):
+                pass
             return
 
         # Some servers may send an auth acknowledgement as a Socket.IO event.
