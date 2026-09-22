@@ -119,6 +119,27 @@ class PocketOptionAdapter:
                 pass
 
     def _ssid(self) -> str:
+        # If Render received the complete browser auth frame, preserve it
+        # byte-for-byte. The PocketOption client itself parses the frame and
+        # rebuilds the connection payload. Reconstructing it here can silently
+        # drop browser fields or pair a session with stale metadata.
+        if _RAW_SESSION.startswith("42") and '"auth"' in _RAW_SESSION:
+            try:
+                parsed = json.loads(_RAW_SESSION[2:])
+                if (
+                    isinstance(parsed, list)
+                    and len(parsed) >= 2
+                    and parsed[0] == "auth"
+                    and isinstance(parsed[1], dict)
+                    and parsed[1].get("session")
+                    and parsed[1].get("uid") is not None
+                    and parsed[1].get("isDemo") is not None
+                ):
+                    return _RAW_SESSION
+            except (ValueError, TypeError, IndexError):
+                pass
+            raise RuntimeError("Pocket Option auth frame is malformed")
+
         try:
             uid = int(POCKET_UID)
             demo = int(POCKET_DEMO)
@@ -126,7 +147,6 @@ class PocketOptionAdapter:
         except ValueError as exc:
             raise RuntimeError("Invalid Pocket Option UID/demo/platform configuration") from exc
 
-        # Community clients document this exact Socket.IO wire format.
         payload = {
             "session": POCKET_SESSION,
             "isDemo": demo,
