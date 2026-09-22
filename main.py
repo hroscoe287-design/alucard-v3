@@ -384,6 +384,7 @@ a{color:inherit}
 const periodSeconds = {{ PERIODS|tojson }};
 let currentTf = {{ selected_tf|tojson }};
 let lastDirection = "WAIT";
+let lastSignalKey = "";
 
 function pad(n){return String(n).padStart(2,"0")}
 function clock(){
@@ -480,20 +481,25 @@ function drawChart(candles){
 function setSignal(s){
   const direction=s?.direction||"WAIT";
   const conf=Number(s?.confidence||0);
+  const reasons=s?.reasons||[];
+  const signalKey=direction+"|"+conf.toFixed(1)+"|"+reasons.join("|");
   lastDirection=direction;
   if(direction==="CALL" || direction==="PUT"){
-    // Entry window begins when the fresh signal reaches the dashboard.
-    startSignalCountdown(12, direction);
+    if(signalKey!==lastSignalKey){
+      startSignalCountdown(12, direction);
+      lastSignalKey=signalKey;
+    }
   } else {
     signalCountdownEndsAt=null;
     signalCountdownDirection="WAIT";
+    lastSignalKey=signalKey;
   }
   const el=document.getElementById("signal");
   el.textContent=direction;
   el.className="signal-word "+(direction==="CALL"?"green":direction==="PUT"?"red":"cyan");
   document.getElementById("confidence").textContent=conf.toFixed(1)+"%";
   document.getElementById("confFill").style.width=Math.max(0,Math.min(100,conf))+"%";
-  const reasons=(s?.reasons||["No live analysis yet."]);
+  const reasons=(s?.reasons||["Waiting for live market analysis."]);
   document.getElementById("reasons").innerHTML=reasons.map(x=>'<div class="reason">'+x+"</div>").join("");
   const ind=s?.indicators||{};
   document.getElementById("indicators").innerHTML=Object.entries(ind).slice(0,9).map(([k,v])=>{
@@ -530,7 +536,7 @@ async function refresh(){
   }catch(e){
     document.getElementById("feedState").textContent="ERROR";
     document.getElementById("engineTop").textContent="OFFLINE";
-    document.getElementById("events").textContent="Dashboard state request failed.";
+    document.getElementById("events").textContent="Dashboard state unavailable: "+(e?.message||"request error");
   }
 }
 async function quantumStatus(){
