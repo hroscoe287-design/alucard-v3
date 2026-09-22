@@ -1,7 +1,7 @@
-# ALUCARD V3 CLEAN BUILD — Render deployment
+# ALUCARD V4 CLEAN BUILD — Render deployment
 services:
   - type: web
-    name: alucard-v3
+    name: alucard-v4
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
