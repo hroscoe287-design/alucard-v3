@@ -56,9 +56,23 @@ if _RAW_SESSION.startswith("42") and '"auth"' in _RAW_SESSION:
         auth = json.loads(_RAW_SESSION[2:])
         payload = auth[1]
         if isinstance(payload, dict):
-            POCKET_SESSION = str(payload.get("session", "")).strip()
-            if not POCKET_UID:
-                POCKET_UID = str(payload.get("uid", "")).strip()
+            # If the user supplied the complete browser auth frame, its
+            # session/UID/demo/platform values are authoritative. This
+            # prevents an older standalone UID variable from being paired
+            # with a newer session token.
+            raw_session = str(payload.get("session", "")).strip()
+            raw_uid = str(payload.get("uid", "")).strip()
+            raw_demo = str(payload.get("isDemo", "")).strip()
+            raw_platform = str(payload.get("platform", "")).strip()
+
+            if raw_session:
+                POCKET_SESSION = raw_session
+            if raw_uid:
+                POCKET_UID = raw_uid
+            if raw_demo:
+                POCKET_DEMO = raw_demo
+            if raw_platform:
+                POCKET_PLATFORM = raw_platform
     except (ValueError, TypeError, IndexError, KeyError):
         pass
 
