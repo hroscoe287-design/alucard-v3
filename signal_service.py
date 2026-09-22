@@ -42,6 +42,11 @@ class SignalService:
         except Exception as exc:
             self.error = str(exc)[:200]
             self.started = False
+        finally:
+            # Surface only the adapter's safe diagnostic label.
+            if self.adapter.last_error:
+                self.error = self.adapter.last_error
+            self.started = False
 
     def _on_candle(self, asset, candle) -> None:
         period = self.period
@@ -62,7 +67,13 @@ class SignalService:
             }
         snap["configured"] = self.adapter.configured
         snap["connected"] = self.adapter.connected
-        snap["error"] = self.error
+        if self.adapter.last_error:
+            self.error = self.adapter.last_error
+        snap["error"] = self.error or (
+            "Pocket Option credentials are not configured"
+            if not self.adapter.configured else
+            "Connecting to Pocket Option WebSocket"
+        )
         snap["engine"] = "LIVE" if signal else "WAITING_FOR_DATA"
         return snap
 
