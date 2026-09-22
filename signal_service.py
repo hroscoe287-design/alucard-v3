@@ -107,6 +107,12 @@ class SignalService:
             for c in self.state.get_candles(self.asset, self.period)[-120:]
         ]
         snap["configured"] = self.adapter.configured
+        snap["account_mode"] = self.adapter.account_mode
+        try:
+            balance = self.adapter.get_balance()
+            snap["balance"] = float(balance) if balance is not None else None
+        except (TypeError, ValueError):
+            snap["balance"] = None
         snap["connected"] = self.adapter.connected
         snap["connection_stage"] = self.adapter.connection_stage
         if self.adapter.last_error:
