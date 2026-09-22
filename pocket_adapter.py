@@ -274,41 +274,54 @@ class PocketOptionAdapter:
                 self.last_error = "Pocket Option authorization rejected"
 
     def _consume_payload(self, payload) -> None:
+        # Pocket Option history/stream payloads are not consistent across
+        # server clusters. Normalize dicts, [asset, candles], and raw OHLC
+        # arrays without requiring one exact envelope shape.
         if isinstance(payload, dict):
-            asset = payload.get("asset") or payload.get("symbol")
-            candles = (
-                payload.get("candles")
-                or payload.get("history")
-                or payload.get("data")
-            )
-            if asset and isinstance(candles, list):
-                for item in candles:
-                    candle = self._normalize_candle(item)
-                    if candle:
-                        self._emit(asset, candle)
-            else:
-                candle = self._normalize_candle(payload)
-                if candle and asset:
-                    self._emit(asset, candle)
+            asset = payload.get("asset") or payload.get("symbol") or payload.get("active")
+            for key in ("candles", "history", "data", "quotes", "values"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    self._consume_items(asset, value)
+                    return
+            candle = self._normalize_candle(payload)
+            if candle and asset:
+                self._emit(str(asset), candle)
+            return
 
-        elif isinstance(payload, list):
-            # History payloads sometimes arrive as [asset, candles].
-            if len(payload) == 2 and isinstance(payload[0], str) and isinstance(payload[1], list):
-                asset = payload[0]
-                for item in payload[1]:
-                    candle = self._normalize_candle(item)
-                    if candle:
-                        self._emit(asset, candle)
+        if isinstance(payload, list):
+            if len(payload) >= 2 and isinstance(payload[0], str) and isinstance(payload[1], list):
+                self._consume_items(payload[0], payload[1])
                 return
+            # Common history form: [[timestamp, open, close, high, low], ...]
+            self._consume_items(None, payload)
 
-            for item in payload:
-                if not isinstance(item, dict):
-                    continue
+    def _consume_items(self, asset, items) -> None:
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if isinstance(item, dict):
                 candle = self._normalize_candle(item)
-                if candle:
-                    asset = item.get("asset") or item.get("symbol")
-                    if asset:
-                        self._emit(asset, candle)
+                item_asset = item.get("asset") or item.get("symbol") or asset
+                if candle and item_asset:
+                    self._emit(str(item_asset), candle)
+                continue
+
+            if isinstance(item, (list, tuple)) and len(item) >= 5 and asset:
+                try:
+                    # Pocket Option historical arrays are commonly
+                    # [timestamp, open, close, high, low].
+                    ts = int(float(item[0]))
+                    o = float(item[1])
+                    c = float(item[2])
+                    h = float(item[3])
+                    l = float(item[4])
+                    v = float(item[5]) if len(item) > 5 else 0.0
+                    candle = self._validate_candle(Candle(ts, o, h, l, c, v))
+                    if candle:
+                        self._emit(str(asset), candle)
+                except (TypeError, ValueError):
+                    continue
 
     @staticmethod
     def _normalize_candle(item) -> Candle | None:
@@ -328,10 +341,17 @@ class PocketOptionAdapter:
         if ts > 10_000_000_000:
             ts //= 1000
 
-        if min(o, h, l, c) <= 0 or h < max(o, c) or l > min(o, c) or h < l:
-            return None
+        return PocketOptionAdapter._validate_candle(Candle(ts, o, h, l, c, v))
 
-        return Candle(ts, o, h, l, c, v)
+    @staticmethod
+    def _validate_candle(candle: Candle) -> Candle | None:
+        if min(candle.open, candle.high, candle.low, candle.close) <= 0:
+            return None
+        if candle.high < max(candle.open, candle.close):
+            return None
+        if candle.low > min(candle.open, candle.close) or candle.high < candle.low:
+            return None
+        return candle
 
     def _emit(self, asset: str, candle: Candle) -> None:
         if self.on_candle:
