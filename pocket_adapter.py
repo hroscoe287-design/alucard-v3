@@ -206,7 +206,7 @@ class PocketOptionAdapter:
                     await client.emit.auth(auth.model_dump())
                     self.connection_stage = "auth_sent"
 
-                @client.on.success_auth
+                @client.on.successauth
                 async def _on_auth(_data):
                     self.connected = True
                     self.last_message_at = time.time()
