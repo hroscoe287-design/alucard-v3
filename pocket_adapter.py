@@ -50,6 +50,8 @@ POCKET_UID = _first_env((
     "UID",
     "USER_ID",
 ))
+POCKET_DEMO = os.getenv("POCKET_DEMO", os.getenv("PO_IS_DEMO", "1")).strip() or "1"
+POCKET_PLATFORM = os.getenv("POCKET_PLATFORM", os.getenv("PO_PLATFORM", "2")).strip() or "2"
 
 if _RAW_SESSION.startswith("42") and '"auth"' in _RAW_SESSION:
     try:
@@ -76,8 +78,7 @@ if _RAW_SESSION.startswith("42") and '"auth"' in _RAW_SESSION:
     except (ValueError, TypeError, IndexError, KeyError):
         pass
 
-POCKET_DEMO = os.getenv("POCKET_DEMO", os.getenv("PO_IS_DEMO", "1")).strip() or "1"
-POCKET_PLATFORM = os.getenv("POCKET_PLATFORM", os.getenv("PO_PLATFORM", "2")).strip() or "2"
+
 
 
 class PocketOptionAdapter:
