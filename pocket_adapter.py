@@ -1,9 +1,8 @@
 """ALUCARD V3 Pocket Option WebSocket adapter.
 
-This adapter expects a valid Pocket Option browser session supplied through
-environment variables. Credentials are never logged or returned by this code.
-The wire format is Socket.IO Engine.IO v4; market messages are normalized into
-Candle objects for the analysis engine.
+Uses the browser-observed Socket.IO/Engine.IO v4 flow:
+open -> Engine.IO connect -> Socket.IO connect -> auth -> history subscription.
+Credentials are read only from environment variables and are never logged.
 """
 
 from __future__ import annotations
@@ -19,13 +18,10 @@ import websocket
 
 from market_engine import Candle
 
-
 POCKET_WS_URL = os.getenv(
     "POCKET_WS_URL",
-    "wss://api-spb.po.market/socket.io/?EIO=4&transport=websocket",
+    "wss://api-us-south.po.market/socket.io/?EIO=4&transport=websocket",
 )
-
-# Session/auth data must be supplied at runtime. Never commit it to GitHub.
 POCKET_SESSION = os.getenv("POCKET_SESSION", "")
 POCKET_UID = os.getenv("POCKET_UID", "")
 POCKET_DEMO = os.getenv("POCKET_DEMO", "0")
@@ -38,56 +34,92 @@ class PocketOptionAdapter:
         self.ws = None
         self.connected = False
         self.last_message_at = 0.0
+        self.last_error = ""
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._subscriptions: set[tuple[str, int]] = set()
         self._candle_buffers = defaultdict(dict)
+        self._socket_ready = False
+        self._auth_sent = False
 
     @property
     def configured(self) -> bool:
-        return bool(POCKET_SESSION and POCKET_UID)
+        return bool(POCKET_SESSION.strip() and POCKET_UID.strip())
 
     def connect(self) -> None:
         if not self.configured:
             raise RuntimeError("Pocket Option credentials are not configured")
 
-        self.ws = websocket.WebSocketApp(
-            POCKET_WS_URL,
-            on_open=self._on_open,
-            on_message=self._on_message,
-            on_error=self._on_error,
-            on_close=self._on_close,
-        )
-        self.ws.run_forever(
-            ping_interval=20,
-            ping_timeout=10,
-            origin="https://pocketoption.com",
-        )
+        while not self._stop.is_set():
+            self._socket_ready = False
+            self._auth_sent = False
+            self.connected = False
+
+            self.ws = websocket.WebSocketApp(
+                POCKET_WS_URL,
+                on_open=self._on_open,
+                on_message=self._on_message,
+                on_error=self._on_error,
+                on_close=self._on_close,
+            )
+
+            try:
+                self.ws.run_forever(
+                    ping_interval=20,
+                    ping_timeout=10,
+                    origin="https://pocketoption.com",
+                )
+            except Exception as exc:
+                self.last_error = f"WebSocket: {type(exc).__name__}"
+
+            self.connected = False
+            self._socket_ready = False
+            if self._stop.wait(3):
+                break
 
     def stop(self) -> None:
         self._stop.set()
         if self.ws:
-            self.ws.close()
+            try:
+                self.ws.close()
+            except Exception:
+                pass
 
     def subscribe(self, asset: str, period: int) -> None:
         self._subscriptions.add((asset, period))
-        if self.connected:
+        if self._socket_ready and self._auth_sent:
             self._send_subscription(asset, period)
 
     def _on_open(self, ws) -> None:
-        self.connected = True
+        self.last_error = ""
+        # Engine.IO/Socket.IO handshake: wait for the server's Socket.IO
+        # connect acknowledgement before sending application auth.
         self._send("40")
-        # Socket.IO auth is sent after the Engine.IO/Socket.IO handshake.
+
+    def _send_auth(self) -> None:
+        if self._auth_sent:
+            return
+        try:
+            uid = int(POCKET_UID)
+            demo = int(POCKET_DEMO)
+            platform = int(POCKET_PLATFORM)
+        except ValueError as exc:
+            self.last_error = "Invalid Pocket Option numeric configuration"
+            raise RuntimeError("Invalid Pocket Option numeric configuration") from exc
+
         auth = {
             "session": POCKET_SESSION,
-            "isDemo": int(POCKET_DEMO),
-            "uid": int(POCKET_UID),
-            "platform": int(POCKET_PLATFORM),
+            "isDemo": demo,
+            "uid": uid,
+            "platform": platform,
             "isFastHistory": True,
             "isOptimized": True,
         }
         self._send("42" + json.dumps(["auth", auth], separators=(",", ":")))
-        time.sleep(0.25)
+        self._auth_sent = True
+
+        # Give the server a short turn to process auth before requesting data.
+        time.sleep(0.35)
         for asset, period in list(self._subscriptions):
             self._send_subscription(asset, period)
 
@@ -112,33 +144,52 @@ class PocketOptionAdapter:
 
     def _on_message(self, ws, message) -> None:
         self.last_message_at = time.time()
-        # Initial V3 adapter accepts JSON Socket.IO messages first.
-        # Binary/native price payloads are intentionally isolated so that
-        # protocol changes cannot corrupt the candle engine.
+
         if not isinstance(message, str):
             return
 
-        if not message.startswith("42"):
+        # Engine.IO ping/pong.
+        if message == "2":
+            self._send("3")
             return
 
-        try:
-            packet = json.loads(message[2:])
-        except (TypeError, ValueError, json.JSONDecodeError):
+        # Socket.IO namespace connection acknowledgement.
+        if message == "40" or message.startswith("40"):
+            self._socket_ready = True
+            try:
+                self._send_auth()
+            except Exception:
+                self.connected = False
             return
 
-        if not isinstance(packet, list) or len(packet) < 2:
-            return
+        # Some servers may send an auth acknowledgement as a Socket.IO event.
+        if message.startswith("42"):
+            try:
+                packet = json.loads(message[2:])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return
 
-        event, payload = packet[0], packet[1]
-        if event not in {"updateHistoryNewFast", "updateStream", "history"}:
-            return
+            if not isinstance(packet, list) or len(packet) < 2:
+                return
 
-        self._consume_payload(payload)
+            event, payload = packet[0], packet[1]
+
+            if event in {"auth", "authenticated", "success", "authorization"}:
+                self.connected = True
+                return
+
+            if event in {"updateHistoryNewFast", "updateStream", "history"}:
+                self.connected = True
+                self._consume_payload(payload)
 
     def _consume_payload(self, payload) -> None:
         if isinstance(payload, dict):
             asset = payload.get("asset") or payload.get("symbol")
-            candles = payload.get("candles") or payload.get("history") or payload.get("data")
+            candles = (
+                payload.get("candles")
+                or payload.get("history")
+                or payload.get("data")
+            )
             if asset and isinstance(candles, list):
                 for item in candles:
                     candle = self._normalize_candle(item)
@@ -150,10 +201,21 @@ class PocketOptionAdapter:
                     self._emit(asset, candle)
 
         elif isinstance(payload, list):
+            # History payloads sometimes arrive as [asset, candles].
+            if len(payload) == 2 and isinstance(payload[0], str) and isinstance(payload[1], list):
+                asset = payload[0]
+                for item in payload[1]:
+                    candle = self._normalize_candle(item)
+                    if candle:
+                        self._emit(asset, candle)
+                return
+
             for item in payload:
+                if not isinstance(item, dict):
+                    continue
                 candle = self._normalize_candle(item)
                 if candle:
-                    asset = getattr(item, "asset", None) if not isinstance(item, dict) else item.get("asset")
+                    asset = item.get("asset") or item.get("symbol")
                     if asset:
                         self._emit(asset, candle)
 
@@ -174,6 +236,7 @@ class PocketOptionAdapter:
 
         if ts > 10_000_000_000:
             ts //= 1000
+
         if min(o, h, l, c) <= 0 or h < max(o, c) or l > min(o, c) or h < l:
             return None
 
@@ -184,7 +247,11 @@ class PocketOptionAdapter:
             self.on_candle(asset, candle)
 
     def _on_error(self, ws, error) -> None:
+        # Never log the exception itself because a library error could contain
+        # request headers or connection details. Keep only a safe type label.
         self.connected = False
+        self.last_error = f"WebSocket error: {type(error).__name__}"
 
     def _on_close(self, ws, code, reason) -> None:
         self.connected = False
+        self._socket_ready = False
