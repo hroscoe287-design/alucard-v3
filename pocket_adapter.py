@@ -1,5 +1,5 @@
-# ALUCARD V3 — direct Pocket Option WebSocket connector
-"""Read-only Pocket Option market-data adapter for ALUCARD V3.
+# ALUCARD V4 — direct Pocket Option WebSocket connector
+"""Read-only Pocket Option market-data adapter for ALUCARD V4.
 
 This connector follows the direct WebSocket architecture used by community
 Pocket Option clients instead of the pocket-option 0.4.x Pydantic/socket.io
