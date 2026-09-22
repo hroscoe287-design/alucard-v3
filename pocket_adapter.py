@@ -1,488 +1,358 @@
-"""ALUCARD V3 Pocket Option WebSocket adapter.
+"""Native Pocket Option Socket.IO market-data adapter for ALUCARD V3.
 
-Uses the browser-observed Socket.IO/Engine.IO v4 flow:
-open -> Engine.IO connect -> Socket.IO connect -> auth -> history subscription.
-Credentials are read only from environment variables and are never logged.
+This implementation uses the maintained unofficial Pocket Option SDK instead of
+hand-rolling the Engine.IO websocket handshake. It is read-only: it subscribes
+to market data and never opens trades.
 """
 
 from __future__ import annotations
 
-import json
+import asyncio
 import os
-import struct
 import threading
 import time
-from collections import defaultdict
 from typing import Callable
-
-import websocket
 
 from market_engine import Candle
 
-POCKET_WS_URL = os.getenv(
-    "POCKET_WS_URL",
-    "wss://api-us-south.po.market/socket.io/?EIO=4&transport=websocket",
+POCKET_SESSION = next(
+    (
+        os.getenv(name, "").strip()
+        for name in (
+            "POCKET_SESSION",
+            "PO_SSID",
+            "POCKET_OPTION_SSID",
+            "POCKET_OPTION_SESSION",
+            "PO_SESSION",
+            "PO_SSID_TOKEN",
+            "PO_TOKEN",
+            "SSID",
+        )
+        if os.getenv(name, "").strip()
+    ),
+    "",
 )
-# Real-account clusters vary by region. If the configured cluster cannot be
-# reached from the Render region, try other known real clusters.
-POCKET_WS_FALLBACKS = [
-    "wss://api-us-north.po.market/socket.io/?EIO=4&transport=websocket",
-    "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
-    "wss://api-asia.po.market/socket.io/?EIO=4&transport=websocket",
-    "wss://api-us2.po.market/socket.io/?EIO=4&transport=websocket",
-    "wss://api-us3.po.market/socket.io/?EIO=4&transport=websocket",
-    "wss://api-us4.po.market/socket.io/?EIO=4&transport=websocket",
-    "wss://api-fr.po.market/socket.io/?EIO=4&transport=websocket",
-    "wss://api-fr2.po.market/socket.io/?EIO=4&transport=websocket",
-    "wss://api-in.po.market/socket.io/?EIO=4&transport=websocket",
-    "wss://api-fin.po.market/socket.io/?EIO=4&transport=websocket",
-    "wss://api-sc.po.market/socket.io/?EIO=4&transport=websocket",
-    "wss://api-hk.po.market/socket.io/?EIO=4&transport=websocket",
-    "wss://api-spb.po.market/socket.io/?EIO=4&transport=websocket",
-    "wss://api-l.po.market/socket.io/?EIO=4&transport=websocket",
-    "wss://api-c.po.market/socket.io/?EIO=4&transport=websocket",
-    "wss://api-msk.po.market/socket.io/?EIO=4&transport=websocket",
-]
-def _first_env(*names: str, default: str = "") -> str:
-    for name in names:
-        value = os.getenv(name, "").strip()
-        if value:
-            return value
-    return default
 
-POCKET_SESSION = _first_env(
-    "POCKET_SESSION", "PO_SSID", "POCKET_OPTION_SSID",
-    "POCKET_OPTION_SESSION", "PO_SESSION", "PO_SSID_TOKEN",
-    "PO_TOKEN", "SSID",
+POCKET_UID = next(
+    (
+        os.getenv(name, "").strip()
+        for name in ("POCKET_UID", "PO_UID", "POCKET_OPTION_UID", "UID", "USER_ID")
+        if os.getenv(name, "").strip()
+    ),
+    "",
 )
-POCKET_UID = _first_env(
-    "POCKET_UID", "PO_UID", "POCKET_OPTION_UID", "UID", "USER_ID",
-)
-POCKET_DEMO = _first_env("POCKET_DEMO", "PO_IS_DEMO", default="0")
-POCKET_PLATFORM = _first_env("POCKET_PLATFORM", "PO_PLATFORM", default="2")
+
+POCKET_DEMO = os.getenv("POCKET_DEMO", os.getenv("PO_IS_DEMO", "0")).strip() or "0"
+POCKET_PLATFORM = os.getenv("POCKET_PLATFORM", os.getenv("PO_PLATFORM", "2")).strip() or "2"
+
+POCKET_WS_URL = os.getenv("POCKET_WS_URL", "").strip()
+
+REAL_REGIONS = [
+    "wss://api-us-north.po.market",
+    "wss://api-us-south.po.market",
+    "wss://api-eu.po.market",
+    "wss://api-asia.po.market",
+    "wss://api-us2.po.market",
+    "wss://api-us3.po.market",
+    "wss://api-us4.po.market",
+    "wss://api-fr.po.market",
+    "wss://api-fr2.po.market",
+    "wss://api-in.po.market",
+    "wss://api-fin.po.market",
+    "wss://api-sc.po.market",
+    "wss://api-hk.po.market",
+    "wss://api-spb.po.market",
+    "wss://api-l.po.market",
+    "wss://api-c.po.market",
+    "wss://api-msk.po.market",
+]
 
 
 class PocketOptionAdapter:
     def __init__(self, on_candle: Callable[[str, Candle], None] | None = None):
         self.on_candle = on_candle
-        self.ws = None
         self.connected = False
         self.last_message_at = 0.0
         self.last_error = ""
-        self._stop = threading.Event()
-        self._lock = threading.Lock()
-        self._subscriptions: set[tuple[str, int]] = set()
-        self._candle_buffers = defaultdict(dict)
-        self._socket_ready = False
-        self._auth_sent = False
         self.connection_stage = "idle"
-        self._pending_binary_event = None
-        self._auth_event = threading.Event()
-        self._tick_bars = {}
+        self._stop = threading.Event()
+        self._subscriptions: set[tuple[str, int]] = set()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._client = None
+        self._bars: dict[tuple[str, int], dict] = {}
 
     @property
     def configured(self) -> bool:
-        return bool(POCKET_SESSION.strip() and POCKET_UID.strip())
+        return bool(POCKET_SESSION and POCKET_UID)
+
+    def subscribe(self, asset: str, period: int) -> None:
+        self._subscriptions.add((asset, period))
+        if self._loop and self._client and self.connected:
+            asyncio.run_coroutine_threadsafe(
+                self._subscribe_async(asset, period),
+                self._loop,
+            )
+
+    async def _subscribe_async(self, asset: str, period: int) -> None:
+        from pocket_option.models import Asset, ChangeAssetRequest
+
+        po_asset = Asset(asset)
+        await self._client.emit.subscribe_to_asset(po_asset)
+        await self._client.emit.change_asset(
+            ChangeAssetRequest(asset=po_asset, period=period)
+        )
+        await self._client.emit.subscribe_for_market_sentiment(po_asset)
+        self.connection_stage = "market_subscription_sent"
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._loop and self._client:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self._client.disconnect(),
+                    self._loop,
+                )
+            except Exception:
+                pass
 
     def connect(self) -> None:
         if not self.configured:
             raise RuntimeError("Pocket Option credentials are not configured")
 
-        print(
-            f"ALUCARD Pocket Option connector starting "
-            f"(session_configured={bool(POCKET_SESSION)}, uid_configured={bool(POCKET_UID)})",
-            flush=True,
-        )
-
-        urls = [POCKET_WS_URL] + [u for u in POCKET_WS_FALLBACKS if u != POCKET_WS_URL]
-
-        while not self._stop.is_set():
-            connected_this_round = False
-
-            for url in urls:
-                if self._stop.is_set():
-                    break
-
-                self._socket_ready = False
-                self._auth_sent = False
-                self._auth_event.clear()
-                self.connected = False
-                host = url.split("/", 3)[2] if "://" in url else "unknown"
-                self.connection_stage = f"opening:{host}"
-                print(f"ALUCARD Pocket Option trying {host}", flush=True)
-
-                self.ws = websocket.WebSocketApp(
-                    url,
-                    on_open=self._on_open,
-                    on_message=self._on_message,
-                    on_error=self._on_error,
-                    on_close=self._on_close,
-                )
-
-                try:
-                    self.ws.run_forever(
-                        ping_interval=20,
-                        ping_timeout=10,
-                        origin="https://m.pocketoption.com",
-                        http_no_proxy=["*"],
-                        http_proxy_timeout=15,
-                    )
-                except Exception as exc:
-                    self.last_error = f"WebSocket: {type(exc).__name__}"
-                    self.connection_stage = "run_forever_error"
-
-                if self.connected or self._socket_ready:
-                    connected_this_round = True
-                    break
-
-                self.connected = False
-                self._socket_ready = False
-
-            if connected_this_round:
-                if self._stop.wait(3):
-                    break
-            elif self._stop.wait(2):
-                break
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self.ws:
-            try:
-                self.ws.close()
-            except Exception:
-                pass
-
-    def subscribe(self, asset: str, period: int) -> None:
-        self._subscriptions.add((asset, period))
-        if self._socket_ready and self._auth_sent:
-            self._send_subscription(asset, period)
-
-    def _on_open(self, ws) -> None:
-        self.last_error = ""
-        self.connection_stage = "transport_open"
-        print("ALUCARD Pocket Option WebSocket transport opened", flush=True)
-        # Engine.IO sends the initial 0{...} OPEN packet first. The client
-        # must answer with Socket.IO 40; sending 40 from on_open races the
-        # Engine.IO handshake and can cause the server to close the socket.
-        self.connection_stage = "waiting_engineio_open"
-
-    def _send_auth(self) -> None:
-        if self._auth_sent:
-            return
         try:
-            uid = int(POCKET_UID)
+            asyncio.run(self._connect_loop())
+        except Exception as exc:
+            self.connected = False
+            self.last_error = f"SDK: {type(exc).__name__}"
+            self.connection_stage = "sdk_error"
+            raise
+
+    async def _connect_loop(self) -> None:
+        from pocket_option import PocketOptionClient
+        from pocket_option.contrib.default_init import default_init
+        from pocket_option.models import Asset, AuthorizationData
+
+        try:
             demo = int(POCKET_DEMO)
             platform = int(POCKET_PLATFORM)
+            uid = int(POCKET_UID)
         except ValueError as exc:
-            self.last_error = "Invalid Pocket Option numeric configuration"
             raise RuntimeError("Invalid Pocket Option numeric configuration") from exc
 
-        auth = {
-            "session": POCKET_SESSION,
-            "isDemo": demo,
-            "uid": uid,
-            "platform": platform,
-            "isFastHistory": True,
-            "isOptimized": True,
-        }
-        self.connection_stage = "auth_sent"
-        self._send("42" + json.dumps(["auth", auth], separators=(",", ":")))
-        self._auth_sent = True
-        self.connection_stage = "waiting_for_auth"
-
-    def _send_subscription(self, asset: str, period: int) -> None:
-        now = int(time.time())
-        # Pocket Option history requests use a unique index in centiseconds,
-        # while the range end time is normal Unix seconds.
-        request_index = int(time.time() * 100)
-        # Pocket Option clients use changeSymbol/subfor for the live stream
-        # and loadHistoryPeriod for the initial candle history.
-        self._send("42" + json.dumps(
-            ["changeSymbol", {"asset": asset, "period": period}],
-            separators=(",", ":"),
-        ))
-        self._send("42" + json.dumps(
-            ["subscribeSymbol", {"asset": asset}],
-            separators=(",", ":"),
-        ))
-        self._send("42" + json.dumps(
-            ["subfor", asset],
-            separators=(",", ":"),
-        ))
-        payload = [
-            "loadHistoryPeriod",
+        auth = AuthorizationData.model_validate(
             {
-                "asset": asset,
-                "index": now,
-                "time": now - 9000,
-                "offset": 9000,
-                "period": period,
-            },
-        ]
-        self._send("42" + json.dumps(payload, separators=(",", ":")))
+                "session": POCKET_SESSION,
+                "isDemo": demo,
+                "uid": uid,
+                "platform": platform,
+                "isFastHistory": True,
+                "isOptimized": True,
+            }
+        )
 
-    def _send(self, message: str) -> None:
-        if self.ws:
-            with self._lock:
-                self.ws.send(message)
+        assets = [Asset(asset) for asset, _ in self._subscriptions]
+        if not assets:
+            assets = [Asset("EURUSD_otc")]
 
-    def _on_message(self, ws, message) -> None:
-        self.last_message_at = time.time()
+        periods = [period for _, period in self._subscriptions]
+        period = periods[0] if periods else 60
 
-        # Socket.IO binary attachment: the preceding 451- packet names the
-        # event and this frame contains the JSON payload.
-        if isinstance(message, (bytes, bytearray)):
-            event = self._pending_binary_event
-            self._pending_binary_event = None
-            raw = bytes(message)
-            if event:
-                try:
-                    try:
-                        decoded = json.loads(raw.decode("utf-8"))
-                    except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
-                        decoded = None
-                    self.connected = True
-                    self.connection_stage = "market_data_received"
-                    if event == "successauth":
-                        self.connection_stage = "authenticated"
-                        for asset, period in list(self._subscriptions):
-                            self._send_subscription(asset, period)
-                    elif decoded is not None:
-                        self._consume_payload(decoded, default_asset=self._current_asset())
-                    elif event == "updateStream":
-                        self._consume_binary_tick(raw)
-                except Exception:
-                    pass
-            elif len(raw) == 39:
-                self._consume_binary_tick(raw)
-            return
+        regions = list(REAL_REGIONS)
+        if POCKET_WS_URL:
+            regions = [POCKET_WS_URL] + [x for x in regions if x != POCKET_WS_URL]
 
-        if not isinstance(message, str):
-            return
+        for base_url in regions:
+            if self._stop.is_set():
+                return
 
-        # Engine.IO OPEN packet. A Socket.IO namespace connection packet must
-        # not be sent until the Engine.IO transport has opened.
-        if message.startswith("0"):
-            self.connection_stage = "engineio_open"
-            self._send("40")
-            self.connection_stage = "socketio_connect_sent"
-            return
-
-        # Engine.IO ping/pong.
-        if message == "2":
-            self._send("3")
-            return
-
-        # Socket.IO namespace connection acknowledgement.
-        if message == "40" or message.startswith("40"):
-            self._socket_ready = True
-            self.connection_stage = "socketio_ready"
-            try:
-                self._send_auth()
-            except Exception:
-                self.connected = False
-            return
-
-        # Pocket Option commonly uses 41 / NotAuthorized for rejected auth.
-        if message == "41" or "NotAuthorized" in message:
+            client = PocketOptionClient(
+                logger=False,
+                socketio_logger=False,
+                engineio_logger=False,
+                request_timeout=8,
+                reconnection=True,
+                reconnection_attempts=0,
+            )
+            self._client = client
+            self._loop = asyncio.get_running_loop()
             self.connected = False
-            self.connection_stage = "auth_error"
-            self.last_error = "Pocket Option authorization rejected"
-            return
+            self.connection_stage = f"connecting:{base_url.split('//')[-1]}"
+            self.last_error = ""
 
-        # Pocket Option can return binary-event envelopes such as
-        # 451-["updateStream",...] and 451-["loadHistoryPeriodFast",...].
-        if message.startswith("451-"):
-            try:
-                raw = json.loads(message[4:])
-                if isinstance(raw, list) and raw:
-                    event = raw[0]
-                    if event == "successauth":
-                        self.connected = True
-                        self.connection_stage = "authenticated"
-                        self._auth_event.set()
-                        for asset, period in list(self._subscriptions):
-                            self._send_subscription(asset, period)
-                        return
-                    if event in {"loadHistoryPeriodFast", "updateHistoryNewFast", "updateStream", "history"}:
-                        self._pending_binary_event = event
-                        self.connected = True
-                        self.connection_stage = "market_data_received"
-                        # The actual payload arrives as the next WebSocket
-                        # binary frame; do not discard it.
-                        return
-            except (TypeError, ValueError, json.JSONDecodeError):
-                pass
-            return
+            default_init(
+                client,
+                authorization=auth,
+                sub_assets=assets,
+                sub_period=period,
+            )
 
-        # Some servers may send an auth acknowledgement as a Socket.IO event.
-        if message.startswith("42"):
-            try:
-                packet = json.loads(message[2:])
-            except (TypeError, ValueError, json.JSONDecodeError):
-                return
+            @client.on.connect
+            async def _on_connect():
+                self.connection_stage = "socketio_connected"
 
-            if not isinstance(packet, list) or len(packet) < 2:
-                return
-
-            event, payload = packet[0], packet[1]
-
-            if event in {"successauth", "auth", "authenticated", "success", "authorization"}:
+            @client.on.success_auth
+            async def _on_auth(_data):
                 self.connected = True
+                self.last_message_at = time.time()
                 self.connection_stage = "authenticated"
-                self._auth_event.set()
-                for asset, period in list(self._subscriptions):
-                    self._send_subscription(asset, period)
-                return
+                print("ALUCARD Pocket Option SDK authenticated", flush=True)
 
-            if event in {"loadHistoryPeriodFast", "updateHistoryNewFast", "updateStream", "history"}:
+            @client.on.load_history_period_fast
+            async def _on_history(_data):
+                if not self.connected:
+                    return
+                self.last_message_at = time.time()
+                self.connection_stage = "market_data_received"
+                for asset, period in list(self._subscriptions):
+                    try:
+                        candles = await client.candles.get_candles(
+                            Asset(asset),
+                            timeframe=period,
+                            count=120,
+                        )
+                    except Exception:
+                        continue
+                    for candle in candles:
+                        self._emit_sdk_candle(asset, candle)
+
+            @client.on.update_history_new_fast
+            async def _on_history_update(_data):
+                self.last_message_at = time.time()
+                if self.connected:
+                    self.connection_stage = "market_data_received"
+
+            @client.on.update_close_value
+            async def _on_stream(items):
+                self.last_message_at = time.time()
                 self.connected = True
                 self.connection_stage = "market_data_received"
-                self._consume_payload(payload)
-                return
+                for item in items or []:
+                    asset = str(getattr(item, "asset", "")).split(".")[-1]
+                    timestamp = float(getattr(item, "timestamp", 0))
+                    price = float(getattr(item, "value", 0))
+                    if asset and price > 0:
+                        self._consume_tick(asset, timestamp, price)
 
-            # Socket.IO CONNECT_ERROR packets are encoded as 44...
-            if event == "connect_error":
+            try:
+                self.connection_stage = f"opening:{base_url.split('//')[-1]}"
+                print(
+                    f"ALUCARD Pocket Option SDK trying {base_url.split('//')[-1]}",
+                    flush=True,
+                )
+                await client.connect(base_url, auth=auth, wait=True, wait_timeout=10, retry=False)
+
+                # Socket.IO connect succeeded. default_init sends auth and the
+                # successauth event flips self.connected.
+                try:
+                    await asyncio.wait_for(client.authorized_event.wait(), timeout=12)
+                except TimeoutError:
+                    self.connection_stage = "authorization_timeout"
+                    self.last_error = "Pocket Option authorization timeout"
+                    await client.disconnect()
+                    continue
+
+                self.connected = True
+                self.connection_stage = "authenticated"
+
+                # Ensure the selected subscription is active even if the
+                # server did not replay the default_init callbacks.
+                for asset, sub_period in list(self._subscriptions):
+                    await self._subscribe_async(asset, sub_period)
+
+                await client.wait()
+            except Exception as exc:
                 self.connected = False
-                self.connection_stage = "auth_error"
-                self.last_error = "Pocket Option authorization rejected"
+                self.last_error = f"SDK {type(exc).__name__}"
+                self.connection_stage = "sdk_connection_error"
+                print(
+                    f"ALUCARD Pocket Option SDK connection error: {type(exc).__name__}",
+                    flush=True,
+                )
+            finally:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
 
-    def _current_asset(self) -> str | None:
-        return next(iter(self._subscriptions), (None, 0))[0]
+            if not self._stop.is_set():
+                await asyncio.sleep(1)
 
-    def _consume_tick(self, asset: str, timestamp, price) -> None:
-        try:
-            timestamp = int(float(timestamp))
-            price = float(price)
-        except (TypeError, ValueError):
-            return
-        if timestamp > 10000000000:
-            timestamp //= 1000
-        if price <= 0:
-            return
-        period = next(iter(self._subscriptions), (asset, 60))[1]
-        bucket = (timestamp // period) * period
+        self.connected = False
+        if not self.last_error:
+            self.last_error = "Pocket Option regions exhausted"
+        self.connection_stage = "regions_exhausted"
+
+    def _consume_tick(self, asset: str, timestamp: float, price: float) -> None:
+        if timestamp > 10_000_000_000:
+            timestamp /= 1000.0
+
+        period = next(
+            (p for a, p in self._subscriptions if a == asset),
+            next(iter(self._subscriptions), ("", 60))[1],
+        )
+        bucket = int(timestamp // period) * period
         key = (asset, period)
-        bar = self._tick_bars.get(key)
+        bar = self._bars.get(key)
+
         if bar is None or bar["timestamp"] != bucket:
             if bar is not None:
-                self._emit(asset, Candle(bar["timestamp"], bar["open"], bar["high"], bar["low"], bar["close"], bar["volume"]))
-            self._tick_bars[key] = {"timestamp": bucket, "open": price, "high": price, "low": price, "close": price, "volume": 1.0}
+                self._emit(
+                    asset,
+                    Candle(
+                        bar["timestamp"],
+                        bar["open"],
+                        bar["high"],
+                        bar["low"],
+                        bar["close"],
+                        bar["volume"],
+                    ),
+                )
+            bar = {
+                "timestamp": bucket,
+                "open": price,
+                "high": price,
+                "low": price,
+                "close": price,
+                "volume": 1.0,
+            }
+            self._bars[key] = bar
         else:
             bar["high"] = max(bar["high"], price)
             bar["low"] = min(bar["low"], price)
             bar["close"] = price
             bar["volume"] += 1.0
-        bar = self._tick_bars[key]
-        self._emit(asset, Candle(bar["timestamp"], bar["open"], bar["high"], bar["low"], bar["close"], bar["volume"]))
-    def _consume_binary_tick(self, raw: bytes) -> None:
-        if len(raw) != 39:
-            return
+
+        self._emit(
+            asset,
+            Candle(
+                bar["timestamp"],
+                bar["open"],
+                bar["high"],
+                bar["low"],
+                bar["close"],
+                bar["volume"],
+            ),
+        )
+
+    def _emit_sdk_candle(self, asset: str, candle) -> None:
         try:
-            values = struct.unpack("<IdIfffff", raw)
-            timestamp = values[1]
-            price = next((v for v in values[3:] if v > 0), None)
-            if price is not None:
-                self._consume_tick(self._current_asset() or "", timestamp, price)
-        except (struct.error, TypeError, ValueError):
+            ts = float(candle.timestamp.timestamp())
+            if ts > 10_000_000_000:
+                ts /= 1000.0
+            self._emit(
+                asset,
+                Candle(
+                    int(ts),
+                    float(candle.open),
+                    float(candle.high),
+                    float(candle.low),
+                    float(candle.close),
+                    0.0,
+                ),
+            )
+        except (AttributeError, TypeError, ValueError):
             return
-
-    def _consume_payload(self, payload, default_asset=None) -> None:
-        # Pocket Option history/stream payloads are not consistent across
-        # server clusters. Normalize dicts, [asset, candles], and raw OHLC
-        # arrays without requiring one exact envelope shape.
-        if isinstance(payload, dict):
-            asset = payload.get("asset") or payload.get("symbol") or payload.get("active") or default_asset
-            for key in ("candles", "history", "data", "quotes", "values"):
-                value = payload.get(key)
-                if isinstance(value, list):
-                    for row in value:
-                        if isinstance(row, (list, tuple)) and 2 <= len(row) < 5 and asset:
-                            self._consume_tick(str(asset), row[0], row[1])
-                    self._consume_items(asset, value)
-                    return
-            candle = self._normalize_candle(payload)
-            if candle and asset:
-                self._emit(str(asset), candle)
-            return
-
-        if isinstance(payload, list):
-            if len(payload) >= 2 and isinstance(payload[0], str) and isinstance(payload[1], list):
-                self._consume_items(payload[0], payload[1])
-                return
-            # Common history form: [[timestamp, open, close, high, low], ...]
-            self._consume_items(default_asset, payload)
-
-    def _consume_items(self, asset, items) -> None:
-        if not isinstance(items, list):
-            return
-        for item in items:
-            if isinstance(item, dict):
-                candle = self._normalize_candle(item)
-                item_asset = item.get("asset") or item.get("symbol") or asset
-                if candle and item_asset:
-                    self._emit(str(item_asset), candle)
-                continue
-
-            if isinstance(item, (list, tuple)) and len(item) >= 5 and asset:
-                try:
-                    # Pocket Option historical arrays are commonly
-                    # [timestamp, open, close, high, low].
-                    ts = int(float(item[0]))
-                    o = float(item[1])
-                    c = float(item[2])
-                    h = float(item[3])
-                    l = float(item[4])
-                    v = float(item[5]) if len(item) > 5 else 0.0
-                    candle = self._validate_candle(Candle(ts, o, h, l, c, v))
-                    if candle:
-                        self._emit(str(asset), candle)
-                except (TypeError, ValueError):
-                    continue
-
-    @staticmethod
-    def _normalize_candle(item) -> Candle | None:
-        if not isinstance(item, dict):
-            return None
-
-        try:
-            ts = int(item.get("timestamp", item.get("time", item.get("t"))))
-            o = float(item.get("open", item.get("o")))
-            h = float(item.get("high", item.get("h")))
-            l = float(item.get("low", item.get("l")))
-            c = float(item.get("close", item.get("c", item.get("price"))))
-            v = float(item.get("volume", item.get("v", 0.0)))
-        except (TypeError, ValueError):
-            return None
-
-        if ts > 10_000_000_000:
-            ts //= 1000
-
-        return PocketOptionAdapter._validate_candle(Candle(ts, o, h, l, c, v))
-
-    @staticmethod
-    def _validate_candle(candle: Candle) -> Candle | None:
-        if min(candle.open, candle.high, candle.low, candle.close) <= 0:
-            return None
-        if candle.high < max(candle.open, candle.close):
-            return None
-        if candle.low > min(candle.open, candle.close) or candle.high < candle.low:
-            return None
-        return candle
 
     def _emit(self, asset: str, candle: Candle) -> None:
         if self.on_candle:
             self.on_candle(asset, candle)
-
-    def _on_error(self, ws, error) -> None:
-        # Never log the exception itself because a library error could contain
-        # request headers or connection details. Keep only a safe type label.
-        self.connected = False
-        self.connection_stage = "websocket_error"
-        self.last_error = f"WebSocket error: {type(error).__name__}"
-        print(f"ALUCARD Pocket Option WebSocket error: {type(error).__name__}", flush=True)
-
-    def _on_close(self, ws, code, reason) -> None:
-        self.connected = False
-        self._socket_ready = False
-        self.connection_stage = f"closed:{code}" if code is not None else "closed"
