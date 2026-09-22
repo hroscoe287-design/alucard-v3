@@ -37,7 +37,7 @@ _RAW_SESSION = _first_env((
     "PO_SSID_TOKEN",
     "PO_TOKEN",
     "SSID",
-))
+)).strip()
 
 # Accept either a plain session string or the complete browser-style
 # 42["auth",{...}] message.  This also lets ALUCARD derive UID from the
@@ -53,7 +53,7 @@ POCKET_UID = _first_env((
 POCKET_DEMO = os.getenv("POCKET_DEMO", os.getenv("PO_IS_DEMO", "1")).strip() or "1"
 POCKET_PLATFORM = os.getenv("POCKET_PLATFORM", os.getenv("PO_PLATFORM", "2")).strip() or "2"
 
-if _RAW_SESSION.startswith("42") and '"auth"' in _RAW_SESSION:
+if _RAW_SESSION.lstrip().startswith("42") and '"auth"' in _RAW_SESSION:
     try:
         auth = json.loads(_RAW_SESSION[2:])
         payload = auth[1]
@@ -123,9 +123,10 @@ class PocketOptionAdapter:
         # byte-for-byte. The PocketOption client itself parses the frame and
         # rebuilds the connection payload. Reconstructing it here can silently
         # drop browser fields or pair a session with stale metadata.
-        if _RAW_SESSION.startswith("42") and '"auth"' in _RAW_SESSION:
+        raw = _RAW_SESSION.strip()
+        if raw.startswith("42") and '"auth"' in raw:
             try:
-                parsed = json.loads(_RAW_SESSION[2:])
+                parsed = json.loads(raw[2:])
                 if (
                     isinstance(parsed, list)
                     and len(parsed) >= 2
@@ -135,7 +136,7 @@ class PocketOptionAdapter:
                     and parsed[1].get("uid") is not None
                     and parsed[1].get("isDemo") is not None
                 ):
-                    return _RAW_SESSION
+                    return raw
             except (ValueError, TypeError, IndexError):
                 pass
             raise RuntimeError("Pocket Option auth frame is malformed")
@@ -185,10 +186,16 @@ class PocketOptionAdapter:
                     self.connected = False
                     self.connection_stage = "authorization_failed"
                     self.last_error = str(error or "Pocket Option connection failed")[:200]
+                    safe_error = str(error or "Pocket Option connection failed").replace("\n", " ")[:180]
                     print(
-                        f"ALUCARD direct WebSocket connection failed: {type(error).__name__ if error else 'unknown'}",
+                        f"ALUCARD Pocket Option connection rejected: {safe_error}",
                         flush=True,
                     )
+                    if "41" in safe_error or "NotAuthorized" in safe_error or "Unauthorized" in safe_error:
+                        self.connection_stage = "authorization_failed_fresh_ssid_required"
+                        self.last_error = "Pocket Option rejected the SSID (41/NotAuthorized). A fresh browser auth frame is required."
+                        print("ALUCARD AUTH FAILED: fresh Pocket Option browser 42[auth,...] SSID required", flush=True)
+                        break
                     try:
                         client.disconnect_websocket()
                     except Exception:
