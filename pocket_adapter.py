@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import struct
 import threading
 import time
 from collections import defaultdict
@@ -181,9 +182,9 @@ class PocketOptionAdapter:
             "loadHistoryPeriod",
             {
                 "asset": asset,
-                "index": request_index,
+                "index": now,
                 "time": now - 9000,
-                "offset": 300,
+                "offset": 9000,
                 "period": period,
             },
         ]
@@ -202,20 +203,27 @@ class PocketOptionAdapter:
         if isinstance(message, (bytes, bytearray)):
             event = self._pending_binary_event
             self._pending_binary_event = None
+            raw = bytes(message)
             if event:
                 try:
-                    decoded = json.loads(bytes(message).decode("utf-8"))
+                    try:
+                        decoded = json.loads(raw.decode("utf-8"))
+                    except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+                        decoded = None
+                    self.connected = True
+                    self.connection_stage = "market_data_received"
                     if event == "successauth":
-                        self.connected = True
                         self.connection_stage = "authenticated"
                         for asset, period in list(self._subscriptions):
                             self._send_subscription(asset, period)
-                    elif event in {"loadHistoryPeriodFast", "updateHistoryNewFast", "updateStream", "history"}:
-                        self.connected = True
-                        self.connection_stage = "market_data_received"
+                    elif decoded is not None:
                         self._consume_payload(decoded, default_asset=self._current_asset())
-                except (UnicodeDecodeError, TypeError, ValueError, json.JSONDecodeError):
+                    elif event == "updateStream":
+                        self._consume_binary_tick(raw)
+                except Exception:
                     pass
+            elif len(raw) == 39:
+                self._consume_binary_tick(raw)
             return
 
         if not isinstance(message, str):
@@ -328,6 +336,18 @@ class PocketOptionAdapter:
             bar["volume"] += 1.0
         bar = self._tick_bars[key]
         self._emit(asset, Candle(bar["timestamp"], bar["open"], bar["high"], bar["low"], bar["close"], bar["volume"]))
+    def _consume_binary_tick(self, raw: bytes) -> None:
+        if len(raw) != 39:
+            return
+        try:
+            values = struct.unpack("<IdIfffff", raw)
+            timestamp = values[1]
+            price = next((v for v in values[3:] if v > 0), None)
+            if price is not None:
+                self._consume_tick(self._current_asset() or "", timestamp, price)
+        except (struct.error, TypeError, ValueError):
+            return
+
     def _consume_payload(self, payload, default_asset=None) -> None:
         # Pocket Option history/stream payloads are not consistent across
         # server clusters. Normalize dicts, [asset, candles], and raw OHLC
@@ -337,6 +357,9 @@ class PocketOptionAdapter:
             for key in ("candles", "history", "data", "quotes", "values"):
                 value = payload.get(key)
                 if isinstance(value, list):
+                    for row in value:
+                        if isinstance(row, (list, tuple)) and 2 <= len(row) < 5 and asset:
+                            self._consume_tick(str(asset), row[0], row[1])
                     self._consume_items(asset, value)
                     return
             candle = self._normalize_candle(payload)
