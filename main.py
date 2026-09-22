@@ -1,3 +1,4 @@
+# ALUCARD V3 CLEAN BUILD — dashboard entrypoint
 import os
 from flask import Flask, jsonify, render_template_string, request
 from signal_service import service
@@ -5,7 +6,7 @@ from signal_service import service
 app = Flask(__name__)
 APP_NAME = "ALUCARD V3"
 APP_SUBTITLE = "GOTHIC MARKET INTELLIGENCE"
-VERSION = "3.1.0"
+VERSION = "3.2.0"
 
 # Pocket Option exposes very short chart intervals through longer intervals.
 # The catalog is intentionally broad so the dashboard is not limited to the
