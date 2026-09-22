@@ -160,6 +160,9 @@ class PocketOptionAdapter:
 
     def _send_subscription(self, asset: str, period: int) -> None:
         now = int(time.time())
+        # Pocket Option history requests use a unique index in centiseconds,
+        # while the range end time is normal Unix seconds.
+        request_index = int(time.time() * 100)
         # Pocket Option clients use changeSymbol/subfor for the live stream
         # and loadHistoryPeriod for the initial candle history.
         self._send("42" + json.dumps(
@@ -178,9 +181,9 @@ class PocketOptionAdapter:
             "loadHistoryPeriod",
             {
                 "asset": asset,
-                "index": now,
+                "index": request_index,
                 "time": now - 9000,
-                "offset": 9000,
+                "offset": 300,
                 "period": period,
             },
         ]
