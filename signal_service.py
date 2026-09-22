@@ -67,6 +67,7 @@ class SignalService:
             }
         snap["configured"] = self.adapter.configured
         snap["connected"] = self.adapter.connected
+        snap["connection_stage"] = self.adapter.connection_stage
         if self.adapter.last_error:
             self.error = self.adapter.last_error
         snap["error"] = self.error or (
