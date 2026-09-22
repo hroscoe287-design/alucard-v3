@@ -1,3 +1,4 @@
+# ALUCARD V3 CLEAN BUILD — thread-safe market state
 """Thread-safe live market state for ALUCARD V3."""
 
 from __future__ import annotations
