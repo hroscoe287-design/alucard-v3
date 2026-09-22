@@ -119,7 +119,7 @@ class PocketOptionAdapter:
     async def _connect_loop(self) -> None:
         from pocket_option import PocketOptionClient
         from pocket_option.constants import Regions
-        from pocket_option.models import Asset, AuthorizationData
+        from pocket_option.models import Asset, AuthorizationData, ChangeAssetRequest
 
         try:
             demo = int(POCKET_DEMO)
@@ -197,13 +197,14 @@ class PocketOptionAdapter:
                 @client.on.connect
                 async def _on_connect():
                     self.connection_stage = "socketio_connected"
+                    print("ALUCARD Socket.IO connected; sending auth", flush=True)
                     # pocket-option 0.4.0's generated auth emitter expects
                     # JSON-compatible data at runtime, even though its type
                     # annotation names AuthorizationData. Passing the Pydantic
                     # model directly causes Socket.IO to raise
                     # "AuthorizationData is not JSON serializable".
                     await client.emit.auth(auth.model_dump())
-
+                    self.connection_stage = "auth_sent"
 
                 @client.on.success_auth
                 async def _on_auth(_data):
@@ -289,8 +290,8 @@ class PocketOptionAdapter:
                         flush=True,
                     )
 
-                    # default_init() installs AuthorizationData. The SDK's documented
-                    # connection API takes a Regions enum, not a raw hostname.
+                    # Connect the Socket.IO transport first; auth is sent by our connect handler.
+                    # This bypasses the SDK 0.4.0 AuthorizationData serialization bug.
                     await client.connect(region)
 
                     try:
