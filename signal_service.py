@@ -32,12 +32,20 @@ class SignalService:
         self.error = ""
 
     def start(self) -> None:
-        if self.started or not self.adapter.configured:
+        if self.started:
+            return
+        if not self.adapter.configured:
+            self.error = "Pocket Option credentials are not configured"
             return
         self.adapter.subscribe(self.asset, self.period)
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
         self.started = True
+        self.error = ""
+        self.thread = threading.Thread(
+            target=self._run,
+            name="alucard-pocket-connector",
+            daemon=True,
+        )
+        self.thread.start()
 
     def configure(self, asset: str, timeframe: str) -> None:
         self.asset = asset
@@ -55,7 +63,6 @@ class SignalService:
             self.adapter.connect()
         except Exception as exc:
             self.error = str(exc)[:200]
-            self.started = False
         finally:
             if self.adapter.last_error:
                 self.error = self.adapter.last_error
@@ -99,7 +106,7 @@ class SignalService:
             if not self.adapter.configured else
             "Connecting to Pocket Option WebSocket"
         )
-        snap["engine"] = "LIVE" if signal else "WAITING_FOR_DATA"
+        snap["engine"] = "LIVE" if signal else ("STARTING" if self.started else "WAITING_FOR_DATA")
         return snap
 
 
