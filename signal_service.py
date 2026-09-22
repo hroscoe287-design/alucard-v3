@@ -36,10 +36,16 @@ class SignalService:
             return
         if not self.adapter.configured:
             self.error = "Pocket Option credentials are not configured"
+            print("ALUCARD connector not started: Pocket Option credentials are not configured", flush=True)
             return
+
         self.adapter.subscribe(self.asset, self.period)
         self.started = True
         self.error = ""
+        print(
+            f"ALUCARD starting market connector asset={self.asset} timeframe={self.timeframe}",
+            flush=True,
+        )
         self.thread = threading.Thread(
             target=self._run,
             name="alucard-pocket-connector",
@@ -51,8 +57,6 @@ class SignalService:
         self.asset = asset
         self.timeframe = timeframe
         self.period = PERIODS[timeframe]
-        # Keep the live connection alive when possible. The adapter will
-        # switch the symbol/period on the existing socket.
         if self.adapter.connected:
             self.adapter.subscribe(asset, self.period)
         else:
@@ -63,10 +67,15 @@ class SignalService:
             self.adapter.connect()
         except Exception as exc:
             self.error = str(exc)[:200]
+            print(f"ALUCARD connector exception: {type(exc).__name__}", flush=True)
         finally:
             if self.adapter.last_error:
                 self.error = self.adapter.last_error
             self.started = False
+            print(
+                f"ALUCARD connector stopped stage={self.adapter.connection_stage}",
+                flush=True,
+            )
 
     def _on_candle(self, asset, candle) -> None:
         period = self.period
@@ -111,3 +120,16 @@ class SignalService:
 
 
 service = SignalService()
+
+
+def _autostart() -> None:
+    # Start outside the import path so Gunicorn can finish booting immediately.
+    time.sleep(0.25)
+    service.start()
+
+
+threading.Thread(
+    target=_autostart,
+    name="alucard-pocket-autostart",
+    daemon=True,
+).start()
