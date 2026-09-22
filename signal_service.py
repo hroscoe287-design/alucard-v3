@@ -1,3 +1,4 @@
+# ALUCARD V3 CLEAN BUILD — signal orchestration
 """Live signal orchestration for ALUCARD V3."""
 
 from __future__ import annotations
