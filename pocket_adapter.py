@@ -28,7 +28,19 @@ POCKET_WS_URL = os.getenv(
 POCKET_WS_FALLBACKS = [
     "wss://api-us-north.po.market/socket.io/?EIO=4&transport=websocket",
     "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+    "wss://api-asia.po.market/socket.io/?EIO=4&transport=websocket",
+    "wss://api-us2.po.market/socket.io/?EIO=4&transport=websocket",
+    "wss://api-us3.po.market/socket.io/?EIO=4&transport=websocket",
+    "wss://api-us4.po.market/socket.io/?EIO=4&transport=websocket",
+    "wss://api-fr.po.market/socket.io/?EIO=4&transport=websocket",
+    "wss://api-fr2.po.market/socket.io/?EIO=4&transport=websocket",
+    "wss://api-in.po.market/socket.io/?EIO=4&transport=websocket",
+    "wss://api-fin.po.market/socket.io/?EIO=4&transport=websocket",
+    "wss://api-sc.po.market/socket.io/?EIO=4&transport=websocket",
+    "wss://api-hk.po.market/socket.io/?EIO=4&transport=websocket",
     "wss://api-spb.po.market/socket.io/?EIO=4&transport=websocket",
+    "wss://api-l.po.market/socket.io/?EIO=4&transport=websocket",
+    "wss://api-c.po.market/socket.io/?EIO=4&transport=websocket",
     "wss://api-msk.po.market/socket.io/?EIO=4&transport=websocket",
 ]
 def _first_env(*names: str, default: str = "") -> str:
@@ -111,7 +123,7 @@ class PocketOptionAdapter:
                     self.ws.run_forever(
                         ping_interval=20,
                         ping_timeout=10,
-                        origin="https://pocketoption.com",
+                        origin="https://m.pocketoption.com",
                         http_no_proxy=["*"],
                         http_proxy_timeout=15,
                     )
@@ -148,6 +160,7 @@ class PocketOptionAdapter:
     def _on_open(self, ws) -> None:
         self.last_error = ""
         self.connection_stage = "transport_open"
+        print("ALUCARD Pocket Option WebSocket transport opened", flush=True)
         # Engine.IO sends the initial 0{...} OPEN packet first. The client
         # must answer with Socket.IO 40; sending 40 from on_open races the
         # Engine.IO handshake and can cause the server to close the socket.
@@ -467,6 +480,7 @@ class PocketOptionAdapter:
         self.connected = False
         self.connection_stage = "websocket_error"
         self.last_error = f"WebSocket error: {type(error).__name__}"
+        print(f"ALUCARD Pocket Option WebSocket error: {type(error).__name__}", flush=True)
 
     def _on_close(self, ws, code, reason) -> None:
         self.connected = False
