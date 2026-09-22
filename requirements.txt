@@ -1,4 +1,4 @@
-# ALUCARD V3 runtime dependencies
+# ALUCARD V4 runtime dependencies
 Flask>=3.0,<4
 numpy>=2.0,<3
 pandas>=2.2,<3
