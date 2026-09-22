@@ -113,6 +113,7 @@ class PocketOptionAdapter:
                         ping_timeout=10,
                         origin="https://pocketoption.com",
                         http_no_proxy=["*"],
+                        http_proxy_timeout=15,
                     )
                 except Exception as exc:
                     self.last_error = f"WebSocket: {type(exc).__name__}"
@@ -147,10 +148,10 @@ class PocketOptionAdapter:
     def _on_open(self, ws) -> None:
         self.last_error = ""
         self.connection_stage = "transport_open"
-        # Engine.IO/Socket.IO handshake: wait for the server's Socket.IO
-        # connect acknowledgement before sending application auth.
-        self.connection_stage = "socketio_connect_sent"
-        self._send("40")
+        # Engine.IO sends the initial 0{...} OPEN packet first. The client
+        # must answer with Socket.IO 40; sending 40 from on_open races the
+        # Engine.IO handshake and can cause the server to close the socket.
+        self.connection_stage = "waiting_engineio_open"
 
     def _send_auth(self) -> None:
         if self._auth_sent:
@@ -244,6 +245,14 @@ class PocketOptionAdapter:
             return
 
         if not isinstance(message, str):
+            return
+
+        # Engine.IO OPEN packet. A Socket.IO namespace connection packet must
+        # not be sent until the Engine.IO transport has opened.
+        if message.startswith("0"):
+            self.connection_stage = "engineio_open"
+            self._send("40")
+            self.connection_stage = "socketio_connect_sent"
             return
 
         # Engine.IO ping/pong.
