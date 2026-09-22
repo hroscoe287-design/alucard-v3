@@ -277,11 +277,12 @@ class PocketOptionAdapter:
                         flush=True,
                     )
 
+                    # default_init() already installs AuthorizationData on the client.
+                    # Use the SDK's documented connect flow so it sends that configured auth.
                     await client.connect(
                         base_url,
-                        auth=auth.model_dump(mode="json"),
                         wait=True,
-                        wait_timeout=12,
+                        wait_timeout=20,
                         retry=False,
                     )
 
