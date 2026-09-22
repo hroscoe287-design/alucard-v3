@@ -1,5 +1,5 @@
-# ALUCARD V3 CLEAN BUILD — deterministic technical analysis
-"""ALUCARD V3 market-data and technical-analysis core.
+# ALUCARD V4 CLEAN BUILD — deterministic technical analysis
+"""ALUCARD V4 market-data and technical-analysis core.
 
 This module is deliberately independent of the legacy ALUCARD V2 code.
 It consumes normalized OHLC candles and produces deterministic indicators
