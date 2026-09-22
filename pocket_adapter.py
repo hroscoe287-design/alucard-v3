@@ -1,9 +1,9 @@
-# ALUCARD V3 CLEAN BUILD — read-only Pocket Option market connector
-"""Native Pocket Option Socket.IO market-data adapter for ALUCARD V3.
+# ALUCARD V3 — stable Pocket Option market connector
+"""Read-only Pocket Option market-data adapter for ALUCARD V3.
 
-This implementation uses the maintained unofficial Pocket Option SDK instead of
-hand-rolling the Engine.IO websocket handshake. It is read-only: it subscribes
-to market data and never opens trades.
+The connector uses the maintained pocket-option SDK, selects the SDK's own
+region constants (including DEMO regions), and keeps retrying after transient
+WebSocket disconnects. It never places trades.
 """
 
 from __future__ import annotations
@@ -37,36 +37,23 @@ POCKET_SESSION = next(
 POCKET_UID = next(
     (
         os.getenv(name, "").strip()
-        for name in ("POCKET_UID", "PO_UID", "POCKET_OPTION_UID", "UID", "USER_ID")
+        for name in (
+            "POCKET_UID",
+            "PO_UID",
+            "POCKET_OPTION_UID",
+            "UID",
+            "USER_ID",
+        )
         if os.getenv(name, "").strip()
     ),
     "",
 )
 
-POCKET_DEMO = os.getenv("POCKET_DEMO", os.getenv("PO_IS_DEMO", "0")).strip() or "0"
+# Pocket Option's auth payload uses 1 for demo and 0 for real.
+# ALUCARD's dashboard is configured as DEMO by default.
+POCKET_DEMO = os.getenv("POCKET_DEMO", os.getenv("PO_IS_DEMO", "1")).strip() or "1"
 POCKET_PLATFORM = os.getenv("POCKET_PLATFORM", os.getenv("PO_PLATFORM", "2")).strip() or "2"
-
 POCKET_WS_URL = os.getenv("POCKET_WS_URL", "").strip()
-
-REAL_REGIONS = [
-    "wss://api-us-north.po.market",
-    "wss://api-us-south.po.market",
-    "wss://api-eu.po.market",
-    "wss://api-asia.po.market",
-    "wss://api-us2.po.market",
-    "wss://api-us3.po.market",
-    "wss://api-us4.po.market",
-    "wss://api-fr.po.market",
-    "wss://api-fr2.po.market",
-    "wss://api-in.po.market",
-    "wss://api-fin.po.market",
-    "wss://api-sc.po.market",
-    "wss://api-hk.po.market",
-    "wss://api-spb.po.market",
-    "wss://api-l.po.market",
-    "wss://api-c.po.market",
-    "wss://api-msk.po.market",
-]
 
 
 class PocketOptionAdapter:
@@ -131,6 +118,7 @@ class PocketOptionAdapter:
 
     async def _connect_loop(self) -> None:
         from pocket_option import PocketOptionClient
+        from pocket_option.constants import Regions
         from pocket_option.contrib.default_init import default_init
         from pocket_option.models import Asset, AuthorizationData
 
@@ -152,143 +140,218 @@ class PocketOptionAdapter:
             }
         )
 
-        assets = [Asset(asset) for asset, _ in self._subscriptions]
-        if not assets:
-            assets = [Asset("EURUSD_otc")]
+        # Use the SDK's own current region constants instead of maintaining a
+        # second hard-coded list that can drift from the package.
+        if demo:
+            regions = [Regions.DEMO, Regions.DEMO_2]
+        else:
+            regions = [
+                Regions.UNITED_STATES_NORTH,
+                Regions.UNITED_STATES_SOUTH,
+                Regions.EUROPA,
+                Regions.ASIA,
+                Regions.UNITED_STATES_2,
+                Regions.UNITED_STATES_3,
+                Regions.UNITED_STATES_4,
+                Regions.FRANCE_1,
+                Regions.FRANCE_2,
+                Regions.INDIA,
+                Regions.FINLAND,
+                Regions.SEYCHELLES,
+                Regions.HONGKONG,
+                Regions.SERVER_1,
+                Regions.SERVER_2,
+                Regions.SERVER_3,
+                Regions.RUSSIA,
+            ]
 
-        periods = [period for _, period in self._subscriptions]
-        period = periods[0] if periods else 60
-
-        regions = list(REAL_REGIONS)
         if POCKET_WS_URL:
-            regions = [POCKET_WS_URL] + [x for x in regions if x != POCKET_WS_URL]
+            regions = [POCKET_WS_URL] + [
+                x for x in regions if str(x) != POCKET_WS_URL
+            ]
 
-        for base_url in regions:
+        retry_round = 0
+
+        while not self._stop.is_set():
+            retry_round += 1
+            connected_this_round = False
+
+            for base_url in regions:
+                if self._stop.is_set():
+                    return
+
+                assets = [Asset(asset) for asset, _ in self._subscriptions]
+                if not assets:
+                    assets = [Asset("EURUSD_otc")]
+
+                periods = [period for _, period in self._subscriptions]
+                period = periods[0] if periods else 60
+
+                client = PocketOptionClient(
+                    logger=False,
+                    socketio_logger=False,
+                    engineio_logger=False,
+                    request_timeout=12,
+                    reconnection=True,
+                    reconnection_attempts=0,
+                )
+                self._client = client
+                self._loop = asyncio.get_running_loop()
+                self.connected = False
+                self.connection_stage = f"connecting:{str(base_url).split('//')[-1]}"
+                self.last_error = ""
+
+                default_init(
+                    client,
+                    authorization=auth,
+                    sub_assets=assets,
+                    sub_period=period,
+                )
+
+                @client.on.connect
+                async def _on_connect():
+                    self.connection_stage = "socketio_connected"
+
+                @client.on.success_auth
+                async def _on_auth(_data):
+                    self.connected = True
+                    self.last_message_at = time.time()
+                    self.connection_stage = "authenticated"
+                    print("ALUCARD Pocket Option SDK authenticated", flush=True)
+
+                @client.on.disconnect
+                async def _on_disconnect(_data=None):
+                    self.connected = False
+                    self.connection_stage = "socket_disconnected"
+
+                @client.on.load_history_period_fast
+                async def _on_history(_data):
+                    if not self.connected:
+                        return
+                    self.last_message_at = time.time()
+                    self.connection_stage = "market_data_received"
+                    if not self._data_logged:
+                        self._data_logged = True
+                        print("ALUCARD CONFIRMED MARKET DATA", flush=True)
+
+                    for asset, sub_period in list(self._subscriptions):
+                        try:
+                            candles = await client.candles.get_candles(
+                                Asset(asset),
+                                timeframe=sub_period,
+                                count=120,
+                            )
+                        except Exception:
+                            continue
+
+                        for candle in candles:
+                            self._emit_sdk_candle(asset, candle)
+
+                @client.on.update_history_new_fast
+                async def _on_history_update(_data):
+                    self.last_message_at = time.time()
+                    if self.connected:
+                        self.connection_stage = "market_data_received"
+
+                @client.on.update_close_value
+                async def _on_stream(items):
+                    self.last_message_at = time.time()
+                    self.connected = True
+                    self.connection_stage = "market_data_received"
+
+                    if not self._data_logged:
+                        self._data_logged = True
+                        print("ALUCARD CONFIRMED MARKET DATA", flush=True)
+
+                    for item in items or []:
+                        asset = str(getattr(item, "asset", "")).split(".")[-1]
+                        timestamp = float(getattr(item, "timestamp", 0))
+                        price = float(getattr(item, "value", 0))
+                        if asset and price > 0:
+                            self._consume_tick(asset, timestamp, price)
+
+                try:
+                    self.connection_stage = f"opening:{str(base_url).split('//')[-1]}"
+                    print(
+                        f"ALUCARD Pocket Option SDK trying {str(base_url).split('//')[-1]}",
+                        flush=True,
+                    )
+
+                    await client.connect(
+                        base_url,
+                        auth=auth.model_dump(mode="json"),
+                        wait=True,
+                        wait_timeout=12,
+                        retry=False,
+                    )
+
+                    try:
+                        await asyncio.wait_for(
+                            client.authorized_event.wait(),
+                            timeout=15,
+                        )
+                    except TimeoutError:
+                        self.connection_stage = "authorization_timeout"
+                        self.last_error = "Pocket Option authorization timeout"
+                        await client.disconnect()
+                        continue
+
+                    self.connected = True
+                    self.connection_stage = "authenticated"
+                    connected_this_round = True
+                    retry_round = 0
+
+                    # Make sure the selected subscription is active even when
+                    # the server does not replay default_init callbacks.
+                    for asset, sub_period in list(self._subscriptions):
+                        try:
+                            await self._subscribe_async(asset, sub_period)
+                        except Exception as exc:
+                            self.last_error = f"subscription:{type(exc).__name__}"
+
+                    # Stay attached to this server. If it drops, the outer
+                    # loop selects another current region and reconnects.
+                    await client.wait()
+
+                except Exception as exc:
+                    self.connected = False
+                    self.last_error = f"SDK {type(exc).__name__}"
+                    self.connection_stage = "sdk_connection_error"
+                    print(
+                        f"ALUCARD Pocket Option SDK connection error: {type(exc).__name__}",
+                        flush=True,
+                    )
+
+                finally:
+                    self.connected = False
+                    try:
+                        await client.disconnect()
+                    except Exception:
+                        pass
+
+                if self._stop.is_set():
+                    return
+
+                # A connection that actually authenticated/data-streamed has
+                # already proven the credentials are valid; retry immediately
+                # after a disconnect rather than waiting through a full sweep.
+                if connected_this_round:
+                    await asyncio.sleep(1)
+                    break
+
+                await asyncio.sleep(1)
+
             if self._stop.is_set():
                 return
 
-            client = PocketOptionClient(
-                logger=False,
-                socketio_logger=False,
-                engineio_logger=False,
-                request_timeout=8,
-                reconnection=True,
-                reconnection_attempts=0,
-            )
-            self._client = client
-            self._loop = asyncio.get_running_loop()
-            self.connected = False
-            self.connection_stage = f"connecting:{base_url.split('//')[-1]}"
-            self.last_error = ""
-
-            default_init(
-                client,
-                authorization=auth,
-                sub_assets=assets,
-                sub_period=period,
-            )
-
-            @client.on.connect
-            async def _on_connect():
-                self.connection_stage = "socketio_connected"
-
-            @client.on.success_auth
-            async def _on_auth(_data):
-                self.connected = True
-                self.last_message_at = time.time()
-                self.connection_stage = "authenticated"
-                print("ALUCARD Pocket Option SDK authenticated", flush=True)
-
-            @client.on.load_history_period_fast
-            async def _on_history(_data):
-                if not self.connected:
-                    return
-                self.last_message_at = time.time()
-                self.connection_stage = "market_data_received"
-                if not self._data_logged:
-                    self._data_logged = True
-                    print("ALUCARD CONFIRMED MARKET DATA", flush=True)
-                for asset, period in list(self._subscriptions):
-                    try:
-                        candles = await client.candles.get_candles(
-                            Asset(asset),
-                            timeframe=period,
-                            count=120,
-                        )
-                    except Exception:
-                        continue
-                    for candle in candles:
-                        self._emit_sdk_candle(asset, candle)
-
-            @client.on.update_history_new_fast
-            async def _on_history_update(_data):
-                self.last_message_at = time.time()
-                if self.connected:
-                    self.connection_stage = "market_data_received"
-
-            @client.on.update_close_value
-            async def _on_stream(items):
-                self.last_message_at = time.time()
-                self.connected = True
-                self.connection_stage = "market_data_received"
-                if not self._data_logged:
-                    self._data_logged = True
-                    print("ALUCARD CONFIRMED MARKET DATA", flush=True)
-                for item in items or []:
-                    asset = str(getattr(item, "asset", "")).split(".")[-1]
-                    timestamp = float(getattr(item, "timestamp", 0))
-                    price = float(getattr(item, "value", 0))
-                    if asset and price > 0:
-                        self._consume_tick(asset, timestamp, price)
-
-            try:
-                self.connection_stage = f"opening:{base_url.split('//')[-1]}"
-                print(
-                    f"ALUCARD Pocket Option SDK trying {base_url.split('//')[-1]}",
-                    flush=True,
-                )
-                await client.connect(base_url, auth=auth.model_dump(mode="json"), wait=True, wait_timeout=10, retry=False)
-
-                # Socket.IO connect succeeded. default_init sends auth and the
-                # successauth event flips self.connected.
-                try:
-                    await asyncio.wait_for(client.authorized_event.wait(), timeout=12)
-                except TimeoutError:
-                    self.connection_stage = "authorization_timeout"
-                    self.last_error = "Pocket Option authorization timeout"
-                    await client.disconnect()
-                    continue
-
-                self.connected = True
-                self.connection_stage = "authenticated"
-
-                # Ensure the selected subscription is active even if the
-                # server did not replay the default_init callbacks.
-                for asset, sub_period in list(self._subscriptions):
-                    await self._subscribe_async(asset, sub_period)
-
-                await client.wait()
-            except Exception as exc:
-                self.connected = False
-                self.last_error = f"SDK {type(exc).__name__}"
-                self.connection_stage = "sdk_connection_error"
-                print(
-                    f"ALUCARD Pocket Option SDK connection error: {type(exc).__name__}",
-                    flush=True,
-                )
-            finally:
-                try:
-                    await client.disconnect()
-                except Exception:
-                    pass
-
-            if not self._stop.is_set():
-                await asyncio.sleep(1)
+            # If every region failed, back off briefly and try the complete
+            # current SDK region list again instead of stopping permanently.
+            delay = min(15, 2 + retry_round)
+            self.connection_stage = f"retrying_in:{delay}s"
+            await asyncio.sleep(delay)
 
         self.connected = False
-        if not self.last_error:
-            self.last_error = "Pocket Option regions exhausted"
-        self.connection_stage = "regions_exhausted"
+        self.connection_stage = "stopped"
 
     def _consume_tick(self, asset: str, timestamp: float, price: float) -> None:
         if timestamp > 10_000_000_000:
