@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: alucard-v3
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn main:app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 120
+    healthCheckPath: /api/health
+    envVars:
+      - key: POCKET_WS_URL
+        value: wss://api-spb.po.market/socket.io/?EIO=4&transport=websocket
+      - key: POCKET_SESSION
+        sync: false
+      - key: POCKET_UID
+        sync: false
+      - key: POCKET_DEMO
+        value: "0"
+      - key: POCKET_PLATFORM
+        value: "9"
+      - key: POCKET_ASSET
+        value: EURUSD_otc
+      - key: POCKET_TIMEFRAME
+        value: 1m
