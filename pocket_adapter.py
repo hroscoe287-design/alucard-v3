@@ -1,3 +1,4 @@
+# ALUCARD V3 CLEAN BUILD — read-only Pocket Option market connector
 """Native Pocket Option Socket.IO market-data adapter for ALUCARD V3.
 
 This implementation uses the maintained unofficial Pocket Option SDK instead of
