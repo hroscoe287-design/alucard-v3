@@ -79,7 +79,7 @@ class PocketOptionAdapter:
         self._subscriptions: set[tuple[str, int]] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._client = None
-        self._bars: dict[tuple[str, int], dict] = {}\n        self._data_logged = False
+        self._bars: dict[tuple[str, int], dict] = {}
 
     @property
     def configured(self) -> bool:
