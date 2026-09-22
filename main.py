@@ -482,8 +482,8 @@ function drawChart(candles){
 function setSignal(s){
   const direction=s?.direction||"WAIT";
   const conf=Number(s?.confidence||0);
-  const reasons=s?.reasons||[];
-  const signalKey=direction+"|"+conf.toFixed(1)+"|"+reasons.join("|");
+  const signalReasons=s?.reasons||[];
+  const signalKey=direction+"|"+conf.toFixed(1)+"|"+signalReasons.join("|");
   lastDirection=direction;
   if(direction==="CALL" || direction==="PUT"){
     if(signalKey!==lastSignalKey){
