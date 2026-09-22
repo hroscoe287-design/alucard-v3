@@ -31,10 +31,23 @@ POCKET_WS_FALLBACKS = [
     "wss://api-spb.po.market/socket.io/?EIO=4&transport=websocket",
     "wss://api-msk.po.market/socket.io/?EIO=4&transport=websocket",
 ]
-POCKET_SESSION = os.getenv("POCKET_SESSION", "")
-POCKET_UID = os.getenv("POCKET_UID", "")
-POCKET_DEMO = os.getenv("POCKET_DEMO", "0")
-POCKET_PLATFORM = os.getenv("POCKET_PLATFORM", "2")
+def _first_env(*names: str, default: str = "") -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return default
+
+POCKET_SESSION = _first_env(
+    "POCKET_SESSION", "PO_SSID", "POCKET_OPTION_SSID",
+    "POCKET_OPTION_SESSION", "PO_SESSION", "PO_SSID_TOKEN",
+    "PO_TOKEN", "SSID",
+)
+POCKET_UID = _first_env(
+    "POCKET_UID", "PO_UID", "POCKET_OPTION_UID", "UID", "USER_ID",
+)
+POCKET_DEMO = _first_env("POCKET_DEMO", "PO_IS_DEMO", default="0")
+POCKET_PLATFORM = _first_env("POCKET_PLATFORM", "PO_PLATFORM", default="2")
 
 
 class PocketOptionAdapter:
@@ -52,6 +65,7 @@ class PocketOptionAdapter:
         self._auth_sent = False
         self.connection_stage = "idle"
         self._pending_binary_event = None
+        self._auth_event = threading.Event()
         self._tick_bars = {}
 
     @property
@@ -61,6 +75,12 @@ class PocketOptionAdapter:
     def connect(self) -> None:
         if not self.configured:
             raise RuntimeError("Pocket Option credentials are not configured")
+
+        print(
+            f"ALUCARD Pocket Option connector starting "
+            f"(session_configured={bool(POCKET_SESSION)}, uid_configured={bool(POCKET_UID)})",
+            flush=True,
+        )
 
         urls = [POCKET_WS_URL] + [u for u in POCKET_WS_FALLBACKS if u != POCKET_WS_URL]
 
@@ -73,9 +93,11 @@ class PocketOptionAdapter:
 
                 self._socket_ready = False
                 self._auth_sent = False
+                self._auth_event.clear()
                 self.connected = False
                 host = url.split("/", 3)[2] if "://" in url else "unknown"
                 self.connection_stage = f"opening:{host}"
+                print(f"ALUCARD Pocket Option trying {host}", flush=True)
 
                 self.ws = websocket.WebSocketApp(
                     url,
@@ -152,12 +174,7 @@ class PocketOptionAdapter:
         self.connection_stage = "auth_sent"
         self._send("42" + json.dumps(["auth", auth], separators=(",", ":")))
         self._auth_sent = True
-
-        # Give the server a short turn to process auth before requesting data.
-        time.sleep(0.35)
         self.connection_stage = "waiting_for_auth"
-        for asset, period in list(self._subscriptions):
-            self._send_subscription(asset, period)
 
     def _send_subscription(self, asset: str, period: int) -> None:
         now = int(time.time())
@@ -261,6 +278,7 @@ class PocketOptionAdapter:
                     if event == "successauth":
                         self.connected = True
                         self.connection_stage = "authenticated"
+                        self._auth_event.set()
                         for asset, period in list(self._subscriptions):
                             self._send_subscription(asset, period)
                         return
@@ -290,8 +308,7 @@ class PocketOptionAdapter:
             if event in {"successauth", "auth", "authenticated", "success", "authorization"}:
                 self.connected = True
                 self.connection_stage = "authenticated"
-                # Re-send subscriptions after explicit authorization. This
-                # covers servers that ignore market requests sent too early.
+                self._auth_event.set()
                 for asset, period in list(self._subscriptions):
                     self._send_subscription(asset, period)
                 return
