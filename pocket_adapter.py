@@ -273,7 +273,7 @@ class PocketOptionAdapter:
 
                     # default_init() installs AuthorizationData. The SDK's documented
                     # connection API takes a Regions enum, not a raw hostname.
-                    await client.connect(region)
+                    await client.connect(str(region), auth=auth, wait=True, wait_timeout=20, retry=False)
 
                     try:
                         await asyncio.wait_for(
