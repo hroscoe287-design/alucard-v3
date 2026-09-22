@@ -140,8 +140,7 @@ class PocketOptionAdapter:
             }
         )
 
-        # Use the SDK's own current region constants instead of maintaining a
-        # second hard-coded list that can drift from the package.
+        # Use the SDK's own current region constants.
         if demo:
             regions = [Regions.DEMO, Regions.DEMO_2]
         else:
@@ -165,18 +164,13 @@ class PocketOptionAdapter:
                 Regions.RUSSIA,
             ]
 
-        if POCKET_WS_URL:
-            regions = [POCKET_WS_URL] + [
-                x for x in regions if str(x) != POCKET_WS_URL
-            ]
-
         retry_round = 0
 
         while not self._stop.is_set():
             retry_round += 1
             connected_this_round = False
 
-            for base_url in regions:
+            for region in regions:
                 if self._stop.is_set():
                     return
 
@@ -198,7 +192,7 @@ class PocketOptionAdapter:
                 self._client = client
                 self._loop = asyncio.get_running_loop()
                 self.connected = False
-                self.connection_stage = f"connecting:{str(base_url).split('//')[-1]}"
+                self.connection_stage = f"connecting:{str(region)}"
                 self.last_error = ""
 
                 default_init(
@@ -271,20 +265,15 @@ class PocketOptionAdapter:
                             self._consume_tick(asset, timestamp, price)
 
                 try:
-                    self.connection_stage = f"opening:{str(base_url).split('//')[-1]}"
+                    self.connection_stage = f"opening:{str(region)}"
                     print(
-                        f"ALUCARD Pocket Option SDK trying {str(base_url).split('//')[-1]}",
+                        f"ALUCARD Pocket Option SDK trying region {str(region)}",
                         flush=True,
                     )
 
-                    # default_init() already installs AuthorizationData on the client.
-                    # Use the SDK's documented connect flow so it sends that configured auth.
-                    await client.connect(
-                        base_url,
-                        wait=True,
-                        wait_timeout=20,
-                        retry=False,
-                    )
+                    # default_init() installs AuthorizationData. The SDK's documented
+                    # connection API takes a Regions enum, not a raw hostname.
+                    await client.connect(region)
 
                     try:
                         await asyncio.wait_for(
