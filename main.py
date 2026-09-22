@@ -20,7 +20,7 @@ ASSET_GROUPS = {
     "FOREX": [
         "EURUSD", "AUDCAD", "AUDCHF", "AUDJPY", "AUDUSD",
         "CADCHF", "CADJPY", "CHFJPY", "EURAUD", "EURCAD",
-        "EURCHF", "EURGBP", "EURJPY", "GBP/AUD", "GBPCAD",
+        "EURCHF", "EURGBP", "EURJPY", "GBPAUD", "GBPCAD",
         "GBPCHF", "GBPJPY", "GBPUSD", "USDCAD", "USDCHF", "USDJPY"
     ],
     "OTC FOREX": [
