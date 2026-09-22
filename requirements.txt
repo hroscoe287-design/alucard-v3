@@ -1,11 +1,10 @@
-# ALUCARD V3 runtime dependencies — match pocket-option 0.4.0
+# ALUCARD V3 runtime dependencies
 Flask>=3.0,<4
 numpy>=2.0,<3
 pandas>=2.2,<3
-pocket-option==0.4.0
-aiohttp>=3.13.1,<4
-brotli>=1.2.0,<2
-pydantic>=2.12.3,<3
-python-socketio[asyncio-client]>=5.14.2,<6
-pytz>=2025.2,<2027
+
+# Community direct Pocket Option WebSocket client.
+# This replaces the broken pocket-option 0.4.x auth emitter.
+git+https://github.com/chema-creator/PocketOptionApi.git
+
 gunicorn>=23,<24
