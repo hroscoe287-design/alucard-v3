@@ -152,16 +152,56 @@ class PocketOptionAdapter:
                     time.sleep(min(15, 2 + retry))
                     continue
 
+                self.connection_stage = "waiting_for_socket_ready"
+                deadline = time.time() + 30.0
+                while not self._stop.is_set() and time.time() < deadline:
+                    try:
+                        if client.check_connect():
+                            break
+                    except Exception:
+                        pass
+                    time.sleep(0.25)
+
+                if self._stop.is_set():
+                    break
+
+                try:
+                    socket_ready = bool(client.check_connect())
+                except Exception:
+                    socket_ready = False
+
+                if not socket_ready:
+                    self.connected = False
+                    self.connection_stage = "socket_ready_timeout"
+                    self.last_error = "Pocket Option socket did not become ready"
+                    try:
+                        client.disconnect_websocket()
+                    except Exception:
+                        pass
+                    time.sleep(min(15, 2 + retry))
+                    continue
+
                 self.connected = True
                 self.last_message_at = time.time()
                 self.connection_stage = "authenticated"
                 retry = 0
                 print("ALUCARD DIRECT WEBSOCKET AUTHENTICATED", flush=True)
 
-                # Subscribe to the dashboard's selected market.
+                # The library requires server time synchronization before
+                # historical candle requests. Do not request history early.
                 for asset, period in list(self._subscriptions):
                     if client.subscribe(asset, period):
                         self.connection_stage = "market_subscription_sent"
+
+                self.connection_stage = "waiting_for_time_sync"
+                deadline = time.time() + 30.0
+                while not self._stop.is_set() and time.time() < deadline:
+                    try:
+                        if client.is_time_synced():
+                            break
+                    except Exception:
+                        pass
+                    time.sleep(0.25)
 
                 # Seed the engine with real server candles before relying on
                 # tick aggregation. This is read-only.
