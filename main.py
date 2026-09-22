@@ -1,12 +1,12 @@
-# ALUCARD V3 CLEAN BUILD — dashboard entrypoint
+# ALUCARD V4 CLEAN BUILD — dashboard entrypoint
 import os
 from flask import Flask, jsonify, render_template_string, request
 from signal_service import service
 
 app = Flask(__name__)
-APP_NAME = "ALUCARD V3"
+APP_NAME = "ALUCARD V4"
 APP_SUBTITLE = "GOTHIC MARKET INTELLIGENCE"
-VERSION = "3.2.0"
+VERSION = "4.0.0"
 
 # Pocket Option exposes very short chart intervals through longer intervals.
 # The catalog is intentionally broad so the dashboard is not limited to the
@@ -123,7 +123,7 @@ HTML = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ALUCARD V3 • Gothic Market Intelligence</title>
+<title>ALUCARD V4 • Gothic Market Intelligence</title>
 <style>
 :root{
  --bg:#040508;--panel:#080b0e;--panel2:#0b1114;--red:#ff1028;--red2:#8d0015;
@@ -316,7 +316,7 @@ a{color:inherit}
         </div>
         <div class="card">
           <div class="label">Recent Engine Events</div>
-          <div id="events" class="reason">Booting ALUCARD V3…</div>
+          <div id="events" class="reason">Booting ALUCARD V4…</div>
         </div>
       </div>
     </section>
@@ -335,7 +335,7 @@ a{color:inherit}
           <div class="action put">↘ PUT</div>
           <div class="action">◷ WAIT</div>
         </div>
-        <div class="muted" style="font-size:9px;margin-top:9px">Signal controls are display-only. ALUCARD V3 does not place trades.</div>
+        <div class="muted" style="font-size:9px;margin-top:9px">Signal controls are display-only. ALUCARD V4 does not place trades.</div>
       </div>
 
       <div class="card quantum">
