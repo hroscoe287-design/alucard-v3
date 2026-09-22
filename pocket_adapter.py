@@ -22,6 +22,14 @@ POCKET_WS_URL = os.getenv(
     "POCKET_WS_URL",
     "wss://api-us-south.po.market/socket.io/?EIO=4&transport=websocket",
 )
+# Real-account clusters vary by region. If the configured cluster cannot be
+# reached from the Render region, try other known real clusters.
+POCKET_WS_FALLBACKS = [
+    "wss://api-us-north.po.market/socket.io/?EIO=4&transport=websocket",
+    "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+    "wss://api-spb.po.market/socket.io/?EIO=4&transport=websocket",
+    "wss://api-msk.po.market/socket.io/?EIO=4&transport=websocket",
+]
 POCKET_SESSION = os.getenv("POCKET_SESSION", "")
 POCKET_UID = os.getenv("POCKET_UID", "")
 POCKET_DEMO = os.getenv("POCKET_DEMO", "0")
@@ -51,33 +59,51 @@ class PocketOptionAdapter:
         if not self.configured:
             raise RuntimeError("Pocket Option credentials are not configured")
 
+        urls = [POCKET_WS_URL] + [u for u in POCKET_WS_FALLBACKS if u != POCKET_WS_URL]
+
         while not self._stop.is_set():
-            self._socket_ready = False
-            self._auth_sent = False
-            self.connected = False
-            self.connection_stage = "opening"
+            connected_this_round = False
 
-            self.ws = websocket.WebSocketApp(
-                POCKET_WS_URL,
-                on_open=self._on_open,
-                on_message=self._on_message,
-                on_error=self._on_error,
-                on_close=self._on_close,
-            )
+            for url in urls:
+                if self._stop.is_set():
+                    break
 
-            try:
-                self.ws.run_forever(
-                    ping_interval=20,
-                    ping_timeout=10,
-                    origin="https://pocketoption.com",
+                self._socket_ready = False
+                self._auth_sent = False
+                self.connected = False
+                host = url.split("/", 3)[2] if "://" in url else "unknown"
+                self.connection_stage = f"opening:{host}"
+
+                self.ws = websocket.WebSocketApp(
+                    url,
+                    on_open=self._on_open,
+                    on_message=self._on_message,
+                    on_error=self._on_error,
+                    on_close=self._on_close,
                 )
-            except Exception as exc:
-                self.last_error = f"WebSocket: {type(exc).__name__}"
-                self.connection_stage = "run_forever_error"
 
-            self.connected = False
-            self._socket_ready = False
-            if self._stop.wait(3):
+                try:
+                    self.ws.run_forever(
+                        ping_interval=20,
+                        ping_timeout=10,
+                        origin="https://pocketoption.com",
+                        http_no_proxy=["*"],
+                    )
+                except Exception as exc:
+                    self.last_error = f"WebSocket: {type(exc).__name__}"
+                    self.connection_stage = "run_forever_error"
+
+                if self.connected or self._socket_ready:
+                    connected_this_round = True
+                    break
+
+                self.connected = False
+                self._socket_ready = False
+
+            if connected_this_round:
+                if self._stop.wait(3):
+                    break
+            elif self._stop.wait(2):
                 break
 
     def stop(self) -> None:
