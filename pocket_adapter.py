@@ -33,7 +33,7 @@ POCKET_WS_FALLBACKS = [
 POCKET_SESSION = os.getenv("POCKET_SESSION", "")
 POCKET_UID = os.getenv("POCKET_UID", "")
 POCKET_DEMO = os.getenv("POCKET_DEMO", "0")
-POCKET_PLATFORM = os.getenv("POCKET_PLATFORM", "9")
+POCKET_PLATFORM = os.getenv("POCKET_PLATFORM", "2")
 
 
 class PocketOptionAdapter:
@@ -152,12 +152,22 @@ class PocketOptionAdapter:
 
         # Give the server a short turn to process auth before requesting data.
         time.sleep(0.35)
-        self.connection_stage = "subscription_sent"
+        self.connection_stage = "waiting_for_auth"
         for asset, period in list(self._subscriptions):
             self._send_subscription(asset, period)
 
     def _send_subscription(self, asset: str, period: int) -> None:
         now = int(time.time())
+        # Pocket Option clients use changeSymbol/subfor for the live stream
+        # and loadHistoryPeriod for the initial candle history.
+        self._send("42" + json.dumps(
+            ["changeSymbol", {"asset": asset, "period": period}],
+            separators=(",", ":"),
+        ))
+        self._send("42" + json.dumps(
+            ["subfor", {"asset": asset}],
+            separators=(",", ":"),
+        ))
         payload = [
             "loadHistoryPeriod",
             {
@@ -208,15 +218,26 @@ class PocketOptionAdapter:
 
             event, payload = packet[0], packet[1]
 
-            if event in {"auth", "authenticated", "success", "authorization"}:
+            if event in {"successauth", "auth", "authenticated", "success", "authorization"}:
                 self.connected = True
                 self.connection_stage = "authenticated"
+                # Re-send subscriptions after explicit authorization. This
+                # covers servers that ignore market requests sent too early.
+                for asset, period in list(self._subscriptions):
+                    self._send_subscription(asset, period)
                 return
 
-            if event in {"updateHistoryNewFast", "updateStream", "history"}:
+            if event in {"loadHistoryPeriodFast", "updateHistoryNewFast", "updateStream", "history"}:
                 self.connected = True
                 self.connection_stage = "market_data_received"
                 self._consume_payload(payload)
+                return
+
+            # Socket.IO CONNECT_ERROR packets are encoded as 44...
+            if event == "connect_error":
+                self.connected = False
+                self.connection_stage = "auth_error"
+                self.last_error = "Pocket Option authorization rejected"
 
     def _consume_payload(self, payload) -> None:
         if isinstance(payload, dict):
