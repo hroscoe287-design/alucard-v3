@@ -9,18 +9,37 @@ VERSION = "3.0.0"
 TIMEFRAMES = ["5s","15s","30s","1m","2m","3m","5m","15m","30m","1h","4h","1d"]
 
 ASSET_GROUPS = {
-    "FOREX": ["EURUSD","GBPUSD","USDJPY","USDCHF","AUDUSD","USDCAD","NZDUSD","EURGBP","EURJPY","GBPJPY"],
-    "OTC FOREX": ["EURUSD_otc","GBPUSD_otc","USDJPY_otc","USDCHF_otc","AUDUSD_otc","USDCAD_otc","NZDUSD_otc","EURGBP_otc","EURJPY_otc","GBPJPY_otc"],
+    "FOREX": [
+        "AUDCAD","AUDCHF","AUDJPY","AUDNZD","AUDUSD",
+        "CADCHF","CADJPY","CHFJPY",
+        "EURCHF","EURGBP","EURJPY","EURNZD","EURUSD",
+        "GBPAUD","GBPCAD","GBPCHF","GBPJPY","GBPUSD",
+        "NZDJPY","NZDUSD",
+        "USDCAD","USDCHF","USDJPY"
+    ],
+    "OTC FOREX": [
+        "EURUSD_otc","AUDCAD_otc","AUDCHF_otc","AUDJPY_otc","AUDNZD_otc","AUDUSD_otc",
+        "CADCHF_otc","CADJPY_otc","CHFJPY_otc","CHF_NOK_otc",
+        "EURCHF_otc","EURGBP_otc","EURJPY_otc","EURNZD_otc","EURRUB_otc","EURTRY_otc","EURHUF_otc",
+        "GBPAUD_otc","GBPJPY_otc","GBPUSD_otc",
+        "NZDJPY_otc","NZDUSD_otc",
+        "USDCAD_otc","USDCHF_otc","USDJPY_otc","USDRUB_otc",
+        "USDCNH_otc","USDINR_otc","USDSGD_otc","USDTHB_otc","USDMYR_otc",
+        "USDCLP_otc","USDVND_otc","USDPKR_otc","USDPHP_otc","USDMXN_otc","USDIDR_otc",
+        "USDARS_otc","USDBRL_otc","USDBDT_otc","USD DZD_otc",
+        "USDEGP_otc","USDCOP_otc",
+        "ZARUSD_otc","UAHUSD_otc","YERUSD_otc","NGNUSD_otc","TNDUSD_otc","MADUSD_otc","LBPUSD_otc",
+        "BHD CNY_otc","AEDCNY_otc","SARCNY_otc","QARCNY_otc","OMRCNY_otc","JODCNY_otc","KESUSD_otc"
+    ],
     "COMMODITIES": ["XAUUSD","XAGUSD","USOIL","UKOIL","NATGAS"],
-    "OTC COMMODITIES": ["XAUUSD_otc","XAGUSD_otc","USOIL_otc","UKOIL_otc","NATGAS_otc"],
-    "CRYPTO": ["BTCUSD","ETHUSD","LTCUSD","XRPUSD","BCHUSD","DOGEUSD","ADAUSD","SOLUSD","DOTUSD","LINKUSD","AVAXUSD","BNB"],
-    "OTC CRYPTO": ["BTCUSD_otc","ETHUSD_otc","LTCUSD_otc","XRPUSD_otc","BCHUSD_otc","DOGEUSD_otc","ADAUSD_otc","SOLUSD_otc","DOTUSD_otc","LINKUSD_otc","AVAXUSD_otc","BNB_otc"],
-    "STOCKS": ["AAPL","MSFT","AMZN","TSLA","META","GOOGL","NFLX","NVDA"],
-    "OTC STOCKS": ["AAPL_otc","MSFT_otc","AMZN_otc","TSLA_otc","META_otc","GOOGL_otc","NFLX_otc","NVDA_otc"],
-    "INDICES": ["SP500","NAS100","DJI30","DAX40","FTSE100","CAC40"],
-    "OTC INDICES": ["SP500_otc","NAS100_otc","DJI30_otc","DAX40_otc","FTSE100_otc","CAC40_otc"],
+    "OTC COMMODITIES": ["XAUUSD_otc","XAGUSD_otc","USOIL_otc","UKOIL_otc","NATGAS_otc","PLATINUM_otc","PALLADIUM_otc"],
+    "CRYPTO": ["BTCUSD","ETHUSD","LTCUSD","XRPUSD","BCHUSD","DOGEUSD","ADAUSD","SOLUSD","DOTUSD","LINKUSD","AVAXUSD","BNB","TRXUSD","MATICUSD"],
+    "OTC CRYPTO": ["BTCUSD_otc","ETHUSD_otc","LTCUSD_otc","XRPUSD_otc","BCHUSD_otc","DOGEUSD_otc","ADAUSD_otc","SOLUSD_otc","DOTUSD_otc","LINKUSD_otc","AVAXUSD_otc","BNB_otc","TRXUSD_otc","MATICUSD_otc","TONUSD_otc","BTCETF_otc"],
+    "STOCKS": ["AAPL","MCD","META","VISA","VIX","PFE","BABA","CSCO","TSLA","INTC","AXP","BA","XOM","C","GME","AMD","MSFT","PLTR","NFLX","MARA","JNJ","AMZN","COIN"],
+    "OTC STOCKS": ["AAPL_otc","MCD_otc","META_otc","VISA_otc","VIX_otc","PFE_otc","BABA_otc","CSCO_otc","TSLA_otc","INTC_otc","AXP_otc","BA_otc","XOM_otc","C_otc","GME_otc","AMD_otc","MSFT_otc","PLTR_otc","NFLX_otc","MARA_otc","JNJ_otc","AMZN_otc","COIN_otc"],
+    "INDICES": ["US100","100GBP","JPN225","D30EUR","E50EUR","SP500","DJI30","CAC40","HONGKONG33","AUS200"],
+    "OTC INDICES": ["AUS200_otc","E35EUR_otc","100GBP_otc","F40EUR_otc","JPN225_otc","D30EUR_otc","E50EUR_otc","SP500_otc","DJI30_otc","US100_otc"],
 }
-
 HTML = """<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ALUCARD V3</title>
